@@ -28,9 +28,7 @@
   </path>
   <g class="opening-stars">
     <use href="#opening-star" transform="translate(40 117) scale(.48)" fill="#bc9bff"/>
-    <use href="#opening-star" transform="translate(192 48) scale(1.36)" fill="#f2eaff">
-      <animate class="opening-arrival" attributeName="opacity" values="0;0;1" keyTimes="0;.87;1" dur="2.15s" begin="indefinite" fill="freeze"/>
-    </use>
+    <use href="#opening-star" transform="translate(192 48) scale(1.36)" fill="#f2eaff"><animate class="opening-arrival" attributeName="opacity" values="0;0;1" keyTimes="0;.87;1" dur="2.15s" begin="indefinite" fill="freeze"/></use>
     <g class="opening-motion" opacity="0">
       <use href="#opening-star" transform="scale(.47)" fill="#eadbff"/>
       <animate class="opening-animate" attributeName="opacity" values="0;1;1;0" keyTimes="0;.09;.87;1" dur="1.9s" begin="indefinite" fill="freeze"/>
@@ -69,6 +67,11 @@
         <option value="12">12′</option>
       </select>
     </label>
+    <label class="dates" title="Optional: only use visits between these dates (empty = all). SPHEREx observes from April 2025; ranges reaching back to 2010 or 2000 add the archival WISE and 2MASS frames.">Dates
+      <input id="dFrom" type="date" min="1997-01-01" aria-label="From date">
+      <span aria-hidden="true">–</span>
+      <input id="dTo" type="date" min="1997-01-01" aria-label="To date">
+    </label>
     <button type="submit" class="primary">Load</button>
   </form>
   <div class="demos" id="demos" aria-label="Demo targets"></div>
@@ -90,6 +93,7 @@
       <canvas id="overlay" width="560" height="560"></canvas>
       <div class="epoch-label" id="epochLabel"></div>
       <div class="readout" id="readout"></div>
+      <div class="live-status" id="liveStatus" hidden><span class="dot"></span><span id="liveStatusText"></span></div>
       <div class="progress" id="progress" hidden>
         <div class="spinner"></div>
         <p id="progressMsg">Loading…</p>
@@ -103,6 +107,7 @@
     </div>
 
     <div class="timeline" id="timeline" aria-label="Epochs"></div>
+    <p class="small range-note" id="rangeNote" hidden></p>
     <p class="muted small time-note">SPHEREx began its survey in May 2025, so its own visits span 2025–2026 (new data arrive weekly). To stretch the time baseline to ~25 years, archival 2MASS (~2000) and WISE (2010) images of the same field are added as extra frames; see also the 1950s–1990s plates in “Sky context &amp; long-term motion” below.</p>
 
     <div class="controls">
@@ -173,7 +178,7 @@
     <section class="card">
       <h3>Light curve</h3>
       <div id="lcPlot" class="plot small-plot"></div>
-      <p class="muted small">Median flux per visit and detector, normalised per detector. Variable stars change; moving objects stay flat.</p>
+      <p class="muted small">Median flux per visit and detector, normalised per detector. Variable stars change; moving objects stay flat. If no source is detected at the position, the raw fluxes (mJy, around zero) are shown instead. Click any star in the image to see its own light curve.</p>
     </section>
     <section class="card" id="warnCard" hidden>
       <h3>Data-quality notes</h3>

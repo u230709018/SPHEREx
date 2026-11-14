@@ -122,13 +122,38 @@ function medianOthers(arrs, skip) {
   }
   return out;
 }
+// ---------------------------------------------------------------- date range
+function dateRange() { return { from: $("dFrom").value || null, to: $("dTo").value || null }; }
+function inRange(e) {   // a visit (or archival epoch) overlapping the chosen dates
+  const r = dateRange();
+  return (!r.from || e.date_end >= r.from) && (!r.to || e.date_start <= r.to);
+}
+function rangeNote(text) { $("rangeNote").hidden = !text; $("rangeNote").textContent = text || ""; }
+function onRangeChange() {
+  setHash();
+  if (!S.result || isMoving()) return;
+  const dr = S.result.date_range, r = dateRange();
+  // the field was loaded for a narrower range: widen it by loading again
+  if (dr && ((dr[0] && (!r.from || r.from < dr[0])) || (dr[1] && (!r.to || r.to > dr[1])))) return loadTarget(S.target, S.fov);
+  rebuildDisplay(); plotSpectrum(); plotLightcurve(); showMotionBadge();
+}
 function useArchival() {
   return Boolean(S.arch && S.arch.epochs.length && $("ovArch").checked && (S.mode === "blink" || S.mode === "diff") && !isMoving());
 }
 function rebuildDisplay() {
   if (!S.result) return;
   const curId = S.epochs[S.cur]?.epoch;
-  S.epochs = useArchival() ? [...S.arch.epochs, ...S.sph] : S.sph;
+  const r = dateRange(), ranged = !isMoving() && (r.from || r.to);
+  let sph = ranged ? S.sph.filter(inRange) : S.sph;
+  let arch = useArchival() ? (ranged ? S.arch.epochs.filter(inRange) : S.arch.epochs) : [];
+  if (ranged && !sph.length && !arch.length) {
+    rangeNote(`No visits between ${r.from || "the start"} and ${r.to || "today"}. This field was observed on ${S.sph.map((e) => e.date_start).join(", ")}; showing all.`);
+    sph = S.sph; arch = useArchival() ? S.arch.epochs : [];
+  } else if (ranged) {
+    const one = sph.length + arch.length === 1 ? " Only one visit in this range, so nothing can change: widen the dates to compare visits." : " Clear the dates to see all.";
+    rangeNote(`Dates ${r.from || "…"} → ${r.to || "…"}: ${sph.length} of ${S.sph.length} SPHEREx visits${arch.length ? ` + ${arch.map((e) => e.label).join(" + ")}` : ""}.${one}`);
+  } else rangeNote(null);
+  S.epochs = [...arch, ...sph];
   S.cur = Math.max(0, S.epochs.findIndex((e) => e.epoch === curId));
   buildTimeline();
   const eps = S.epochs.map((e) => e.epoch);
@@ -171,6 +196,7 @@ function rebuildDisplay() {
 function findCandidates() {
   S.cands = [];
   if (!S.result || isMoving() || S.epochs.length < 2) return;
+  if (S.result.partial === "preview") return;   // single images: cosmic rays are not rejected yet
   const [ny, nx] = S.result.grid.shape, dets = [...S.dets];
   const base = S.epochs.map((e) => (e.archival ? null : composite(e.epoch, dets)));   // SPHEREx visits only
   if (base.filter(Boolean).length < 2) return;
@@ -394,7 +420,20 @@ function showProgress(on, msg, frac) {
   if (msg) $("progressMsg").textContent = msg;
   if (frac != null) $("progressBar").style.width = `${Math.round(frac * 100)}%`;
 }
-async function loadTarget(t, fov) {
+// New fields load at full quality (up to 8 images per visit and detector, ~1 min on the live site).
+// Results made with fewer images (QUICK, older links) get a "Sharper images" button.
+const QUICK = { max_per_cell: 3, budget: 120 }, FULL = { max_per_cell: 8, budget: 260 };
+function clearCharts() {   // a new field is loading: do not leave the previous target's charts on screen
+  S.spec = { points: [], lightcurve: [] };
+  $("specTitle").textContent = "Spectrum (waiting for images…)"; $("specReset").hidden = true;
+  if (window.Plotly) {
+    ["specPlot", "lcPlot"].forEach((id) => Plotly.react(id, [], { ...PLOT_LAYOUT, annotations: [{ xref: "paper", yref: "paper", x: 0.5, y: 0.5,
+      showarrow: false, text: "waiting for the first measurements…", font: { size: 11, color: "#8e9bb3" } }] }, { displayModeBar: false, responsive: true }));
+  }
+  S.spec = null;
+}
+async function loadTarget(t, fov, quality = FULL) {
+  clearCharts();
   S.target = t; S.fov = fov; S.gaia = null; S.ast = null; S.spec = null; S.specLabel = null;
   $("ovAst").checked = false; $("candidates").hidden = true;
   $("empty").hidden = true; $("targetName").textContent = t.name || `${sexa(t.ra, true)} ${sexa(t.dec)}`;
@@ -402,10 +441,13 @@ async function loadTarget(t, fov) {
   $("targetInfo").textContent = `${t.kind ? t.kind + " · " : ""}RA ${sexa(t.ra, true)} Dec ${sexa(t.dec)} (epoch ${t.ref_epoch || 2000})${pm > 50 ? ` · moves ${(pm / 1000).toFixed(2)}″/yr` : ""}`;
   setHash();
   const body = { ra: t.ra, dec: t.dec, pmra: t.pmra || 0, pmdec: t.pmdec || 0, ref_epoch: t.ref_epoch || 2000,
-                 fov_arcmin: fov, max_per_cell: 8, budget: 260, name: t.name || null };
+                 fov_arcmin: fov, ...quality, name: t.name || null,
+                 priority_dets: S.dets.size && S.dets.size < 6 ? [...S.dets] : null,
+                 date_start: dateRange().from, date_end: dateRange().to };
   runJob("/api/frames", body, "Could not load this field.");
 }
 async function loadObject(name, fov) {
+  clearCharts();
   S.target = { name, sso: true, pmra: 0, pmdec: 0 }; S.fov = Math.min(fov || 4, 15); setFovOption(S.fov);
   S.gaia = null; S.ast = null; S.spec = null; S.specLabel = null; $("ovAst").checked = false;
   $("empty").hidden = true; $("candidates").hidden = true;
@@ -414,6 +456,9 @@ async function loadObject(name, fov) {
   setHash();
   const body = { name, fov_arcmin: S.fov, max_frames: 40 };
   if (name === "3I") Object.assign(body, { start: "2025-08-01", end: "2025-12-31" });  // demo: SPHEREx's two 3I/ATLAS campaigns
+  const dr = dateRange();
+  if (dr.from) body.start = dr.from;
+  if (dr.to) body.end = dr.to;
   runJob("/api/moving", body, "Could not track this object.");
 }
 async function runJob(path, body, failMsg) {
@@ -421,21 +466,39 @@ async function runJob(path, body, failMsg) {
   const token = Symbol(); S.pending = token;
   try {
     let r = await api(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    let seen = 0, showing = false;           // partial results already shown (first/last visit, then all visits)
     while (r.status === "running") {
-      await new Promise((res) => setTimeout(res, 1500));
+      await new Promise((res) => setTimeout(res, 1000));
       if (S.pending !== token) return;
       const j = await api(`/api/jobs/${r.job_id}`);
-      const frac = j.stage === "download" ? 0.1 + 0.75 * (j.done / Math.max(1, j.total)) : j.stage === "process" ? 0.9 : 0.05;
-      showProgress(true, j.message, frac);
       if (j.status === "error") { const e = new Error(j.message); e.candidates = j.candidates; throw e; }
-      if (j.status === "done") r = { status: "done", result_key: j.result_key };
+      if (j.status === "done") { r = { status: "done", result_key: j.result_key }; break; }
+      if ((j.partial_n || 0) > seen) {
+        seen = j.partial_n;
+        try {
+          const part = await api(`/api/jobs/${r.job_id}/partial`);
+          if (S.pending !== token) return;
+          onResult(part, { partial: true });
+          showing = true;
+        } catch { /* the full result will still arrive */ }
+      }
+      const frac = j.stage === "download" ? 0.1 + 0.75 * (j.done / Math.max(1, j.total)) : j.stage === "process" ? 0.9 : 0.05;
+      if (showing) liveStatus(liveText(j));
+      else showProgress(true, j.message, frac);
     }
-    showProgress(true, "Rendering…", 0.97);
+    if (showing) liveStatus("Finishing: spectrum and light curve…");
+    else showProgress(true, "Rendering…", 0.97);
     const res = await api(`/api/result/${r.result_key}`);
     if (S.pending !== token) return;
+    liveStatus(null);
     onResult(res);
   } catch (err) {
-    showProgress(false);
+    showProgress(false); liveStatus(null);
+    if (S.result && S.result.partial) {        // keep the frames we already have on screen
+      $("specTitle").textContent = "Spectrum unavailable";
+      $("badges").insertAdjacentHTML("afterbegin", `<span class="badge warn">Stopped early: ${err.message}</span>`);
+      return;
+    }
     $("empty").hidden = false;
     $("empty").innerHTML = `<p><b>${failMsg}</b><br>${err.message}</p>`;
     if (err.candidates) {
@@ -447,9 +510,37 @@ async function runJob(path, body, failMsg) {
   }
 }
 const isMoving = () => S.result && S.result.mode === "moving";
-function onResult(res) {
-  S.result = res; S.key = res.key; S.epochs = S.sph = res.epochs; S.cur = 0; S.arch = null;
+function liveStatus(text) {
+  $("liveStatus").hidden = !text;
+  if (text) $("liveStatusText").textContent = text;
+}
+function liveText(j) {
+  const r = S.result, what = r && r.partial === "preview" ? "Quick look (1 image per visit) · sharpening" : "Loading the other detectors";
+  return j.stage === "download" ? `${what}: ${j.done}/${j.total} images…` : "Measuring the spectrum…";
+}
+function onResult(res, opt = {}) {
+  // Updates of the same field (partial -> more visits -> final) keep the frame being shown and the player state.
+  const same = Boolean(S.result && S.result.partial && S.result.key === res.key);
+  const curId = same ? S.epochs[S.cur]?.epoch : null;
+  S.result = res; S.key = res.key; S.epochs = S.sph = res.epochs; S.arch = null;
+  S.cur = same ? Math.max(0, res.epochs.findIndex((e) => e.epoch === curId)) : 0;
   S.sphIdx = new Map(res.epochs.map((e, i) => [e.epoch, i]));
+  if (opt.partial) {
+    normaliseFrames();
+    buildTimeline(); if (!same) buildDetButtons(); rebuildDisplay();
+    showProgress(false); $("empty").hidden = true;
+    if (!same) S.specLabel = { name: "target", ra: null, dec: null };
+    if (S.specLabel && S.specLabel.name === "target") {      // live charts, unless the user is looking elsewhere
+      S.spec = { points: res.points || [], lightcurve: res.lightcurve || [] };
+      const n = S.spec.points.length;
+      $("specTitle").textContent = n ? `Spectrum at target (live: ${n} measurements)` : "Spectrum at target (measuring…)";
+      $("specReset").hidden = true;
+      plotSpectrum(); plotLightcurve();
+    }
+    buildBadges(); buildLinks();
+    if (!same) { updateContext(); S.ctxKey = res.key; play(true); }
+    return;
+  }
   if (res.mode === "moving") {
     S.dets = new Set(DETS);                 // each frame is a single detector image
     if (S.mode === "diff" || S.mode === "cdiff") S.mode = "blink";
@@ -460,13 +551,17 @@ function onResult(res) {
   normaliseFrames();
   buildTimeline(); buildDetButtons(); rebuildDisplay();
   showProgress(false);
-  S.spec = { points: res.points, lightcurve: res.lightcurve };
-  S.specLabel = { name: "target", ra: null, dec: null };
-  $("specTitle").textContent = "Spectrum at target"; $("specReset").hidden = true;
-  plotSpectrum(); plotLightcurve(); buildBadges(); buildWarnings(); buildLinks();
+  if (!same || !S.specLabel || S.specLabel.name === "target") {   // keep a spectrum the user clicked during loading
+    S.spec = { points: res.points, lightcurve: res.lightcurve };
+    S.specLabel = { name: "target", ra: null, dec: null };
+    $("specTitle").textContent = "Spectrum at target"; $("specReset").hidden = true;
+    plotSpectrum(); plotLightcurve();
+  }
+  buildBadges(); buildWarnings(); buildLinks();
   if (!isMoving()) { fetchGaia(); fetchArchival(); }
-  updateContext();
-  play(true);
+  if (S.ctxKey !== res.key) updateContext();
+  S.ctxKey = res.key;
+  if (!same) play(true);
 }
 function buildTimeline() {
   const tl = $("timeline"); tl.innerHTML = "";
@@ -577,6 +672,11 @@ function buildLinks() {
     ["IRSA SPHEREx Data Explorer", "https://irsa.ipac.caltech.edu/applications/spherex/"],
   ];
   $("links").innerHTML = L.map(([t, u]) => `<a href="${u}" target="_blank" rel="noopener">${t} ↗</a>`).join("");
+  const q = S.result.quality;
+  if (q && q.max_per_cell < FULL.max_per_cell && S.result.stats.n_total > S.result.stats.n_downloaded) {
+    $("links").insertAdjacentHTML("afterbegin", `<button id="sharperBtn" class="small" title="The first look uses up to ${q.max_per_cell} images per visit and detector. Load up to ${FULL.max_per_cell} for less noisy frames and a better spectrum (about 1-2 min).">Sharper images (use more of the ${S.result.stats.n_total} available)</button>`);
+    $("sharperBtn").onclick = () => loadTarget(S.target, S.fov, FULL);
+  }
 }
 async function fetchGaia() {
   const r = S.result, rad = (S.fov / 60) * 0.75;
@@ -635,8 +735,11 @@ async function fetchAsteroids() {
 // ---------------------------------------------------------------- measured proper motion
 /* Centroid the target in every visit (near its predicted position) and fit a straight line in
    time. SPHEREx astrometry is good to <0.3", so even ~1-pixel motions over a year are measurable. */
+// Systematic centroid error per visit (co-adds of a few reprojected images, PSF changes across the
+// detector, extended sources): 0.12 px = 0.74". Keeps galaxy nuclei (e.g. Centaurus A) from "moving".
+const CENTROID_FLOOR_PX = 0.12;
 function measureMotion() {
-  if (!S.result || isMoving() || S.epochs.length < 3) return null;
+  if (!S.result || isMoving() || S.epochs.length < 3 || S.result.partial === "preview") return null;
   const [ny, nx] = S.result.grid.shape, pix = Math.abs(S.result.grid.cdelt[0]) * 3600;
   const dets = S.dets.size ? [...S.dets] : DETS;
   const pts = [];
@@ -656,7 +759,7 @@ function measureMotion() {
         const v = img[y * nx + x];
         if (Number.isFinite(v) && v > best) { best = v; bx = x; by = y; }
       }
-    if (!(best > 3)) continue;           // need a >3-sigma detection
+    if (!(best > 5)) continue;           // need a clear (>5-sigma) source: noise peaks in empty sky reach 3-4 sigma
     if (hb > 2) { bx = Math.round(px); by = Math.round(py); }   // wide box centred on the prediction
     let sw = 0, sx = 0, sy = 0;
     for (let y = by - hb; y <= by + hb; y++)
@@ -679,7 +782,7 @@ function measureMotion() {
   // grid x grows westward (cdelt1 < 0): +x = -RA direction
   const pmra = -fx.slope * pix, pmdec = fy.slope * pix;
   const err = Math.hypot(fx.err, fy.err) * pix / Math.SQRT2;
-  return { pmra, pmdec, total: Math.hypot(pmra, pmdec), err: Math.max(err, 0.3 / Math.max(0.1, pts.at(-1).t - pts[0].t)),
+  return { pmra, pmdec, total: Math.hypot(pmra, pmdec), err: Math.max(err, (CENTROID_FLOOR_PX * pix) / Math.max(0.1, pts.at(-1).t - pts[0].t)),
            n: pts.length, span: pts.at(-1).t - pts[0].t, arch: pts.filter((p) => p.arch).length };
 }
 function showMotionBadge() {
@@ -688,13 +791,13 @@ function showMotionBadge() {
   el.hidden = !m;
   if (!m) return;
   const cat = Math.hypot(S.target.pmra || 0, S.target.pmdec || 0) / 1000;
-  const sig = m.total / m.err;
+  const sig = m.total / m.err, SIG = 5;   // 5 sigma: a 7x7 search box gives noise centroids that fake 3-4 sigma motions
   const who = m.arch ? "Measured (SPHEREx + archival)" : "Measured by SPHEREx";
-  el.className = "badge " + (sig > 3 ? "good" : "");
+  el.className = "badge " + (sig > SIG ? "good" : "");
   el.title = `Centroid fit over ${m.n} visits spanning ${m.span.toFixed(2)} yr${m.arch ? ` (incl. ${m.arch} archival 2MASS/WISE)` : ""}: μα* = ${m.pmra.toFixed(2)}″/yr, μδ = ${m.pmdec.toFixed(2)}″/yr`;
-  el.textContent = sig > 3
+  el.textContent = sig > SIG
     ? `${who}: ${m.total.toFixed(m.err < 0.1 ? 2 : 1)} ± ${m.err.toFixed(m.err < 0.1 ? 2 : 1)}″/yr${cat > 0.05 ? ` (catalogue ${cat.toFixed(1)}″/yr)` : " – moving!"}`
-    : `${who}: no significant motion (< ${(3 * m.err).toFixed(1)}″/yr)`;
+    : `${who}: no significant motion (< ${(SIG * m.err).toFixed(1)}″/yr)`;
 }
 
 // ---------------------------------------------------------------- Aladin sky context
@@ -799,7 +902,8 @@ const PLOT_LAYOUT = {
 const EPOCH_COLORS = ["#4fb3ff", "#ffb547", "#39d98a", "#ff6b6b", "#c58cff", "#5ef0e0", "#f0e05e", "#ff8fc7"];
 function plotSpectrum() {
   if (!window.Plotly || !S.spec) return;
-  const pts = S.spec.points.filter((p) => p.wavelength_um);
+  const vis = new Set(S.epochs.map((e) => e.epoch));
+  const pts = S.spec.points.filter((p) => p.wavelength_um && vis.has(p.epoch));
   const traces = [];
   if (S.epochs.length > 8) {   // many visits (e.g. moving objects): one trace, colour = date
     const g = pts.filter((p) => p.good);
@@ -837,24 +941,48 @@ function plotSpectrum() {
 }
 function plotLightcurve() {
   if (!window.Plotly || !S.spec) return;
-  const lc = S.spec.lightcurve, traces = [], used = lcDetectors();
-  used.forEach((d) => {
-    const g = lc.filter((r) => r.det === d);
-    const med = [...g.map((r) => r.flux_mjy)].sort((a, b) => a - b)[g.length >> 1] || 1;
-    const norm = Math.abs(med) > 1e-6 ? med : 1;
-    traces.push({ x: g.map((r) => mjdToDate(r.mjd)), y: g.map((r) => r.flux_mjy / norm), mode: "lines+markers", type: "scatter", name: d,
-      line: { color: DET_COLORS[d], width: 1.5 }, marker: { size: 7 },
-      error_y: { type: "data", array: g.map((r) => (r.err_mjy || 0) / Math.abs(norm)), visible: true, thickness: 1, width: 0 },
-      hovertemplate: `${d}: %{y:.2f}× median<br>%{x}<extra></extra>` });
-  });
-  const skipped = DETS.filter((d) => lc.some((r) => r.det === d) && !used.includes(d));
-  Plotly.react("lcPlot", traces, { ...PLOT_LAYOUT, xaxis: { ...PLOT_LAYOUT.xaxis, type: "date" },
-    yaxis: { ...PLOT_LAYOUT.yaxis, title: "Flux / median", type: lcLog() ? "log" : "linear" },
-    annotations: skipped.length ? [{ xref: "paper", yref: "paper", x: 1, y: 1.02, xanchor: "right", yanchor: "bottom", showarrow: false,
-      text: `not detected in ${skipped.join(", ")}`, font: { size: 10, color: "#8e9bb3" } }] : [] }, { displayModeBar: false, responsive: true });
+  const vis = new Set(S.epochs.map((e) => e.epoch));
+  const lc = S.spec.lightcurve.filter((r) => vis.has(r.epoch)), traces = [], used = lcDetectors(lc);
+  const ep = S.epochs.filter((e) => !e.archival), pad = 12;
+  const xr = ep.length ? [mjdToDate(Math.min(...ep.map((e) => e.mjd)) - pad), mjdToDate(Math.max(...ep.map((e) => e.mjd)) + pad)] : undefined;
+  const note = (text) => ({ xref: "paper", yref: "paper", x: 1, y: 1.02, xanchor: "right", yanchor: "bottom", showarrow: false,
+    text, font: { size: 10, color: "#8e9bb3" } });
+  let yaxis, annotations = [], shapes = [];
+  if (used.length) {
+    // source detected: each detector normalised to its median, so variability in different colours can be compared
+    used.forEach((d) => {
+      const g = lc.filter((r) => r.det === d);
+      const med = [...g.map((r) => r.flux_mjy)].sort((a, b) => a - b)[g.length >> 1] || 1;
+      const norm = Math.abs(med) > 1e-6 ? med : 1;
+      traces.push({ x: g.map((r) => mjdToDate(r.mjd)), y: g.map((r) => r.flux_mjy / norm), mode: "lines+markers", type: "scatter", name: d,
+        line: { color: DET_COLORS[d], width: 1.5 }, marker: { size: 7 },
+        error_y: { type: "data", array: g.map((r) => (r.err_mjy || 0) / Math.abs(norm)), visible: true, thickness: 1, width: 0 },
+        hovertemplate: `${d}: %{y:.2f}× median<br>%{x}<extra></extra>` });
+    });
+    const skipped = DETS.filter((d) => lc.some((r) => r.det === d) && !used.includes(d));
+    if (skipped.length) annotations.push(note(`not detected in ${skipped.join(", ")}`));
+    yaxis = { ...PLOT_LAYOUT.yaxis, title: "Flux / median", type: lcLog() ? "log" : "linear" };
+  } else if (lc.length) {
+    // nothing detected (empty sky or a very faint source): show the measured fluxes in mJy around zero
+    DETS.forEach((d) => {
+      const g = lc.filter((r) => r.det === d);
+      if (!g.length) return;
+      traces.push({ x: g.map((r) => mjdToDate(r.mjd)), y: g.map((r) => r.flux_mjy), mode: "lines+markers", type: "scatter", name: d,
+        line: { color: DET_COLORS[d], width: 1, dash: "dot" }, marker: { size: 6 }, opacity: 0.85,
+        error_y: { type: "data", array: g.map((r) => r.err_mjy || 0), visible: true, thickness: 1, width: 0 },
+        hovertemplate: `${d}: %{y:.3f} mJy<br>%{x}<extra></extra>` });
+    });
+    shapes = [{ type: "line", xref: "paper", x0: 0, x1: 1, yref: "y", y0: 0, y1: 0, line: { color: "rgba(200,210,230,.4)", width: 1 } }];
+    annotations.push(note(S.result && S.result.partial ? "no clear source yet – still measuring" : "No source detected here – click a star in the image to see its light curve"));
+    yaxis = { ...PLOT_LAYOUT.yaxis, title: "Flux (mJy)", type: "linear", zeroline: false };
+  } else {
+    annotations.push(note(S.result && S.result.partial ? "waiting for the first measurements…" : "no measurements in this date range"));
+    yaxis = { ...PLOT_LAYOUT.yaxis, title: "Flux / median", type: "linear" };
+  }
+  Plotly.react("lcPlot", traces, { ...PLOT_LAYOUT, xaxis: { ...PLOT_LAYOUT.xaxis, type: "date", range: xr }, yaxis, annotations, shapes },
+    { displayModeBar: false, responsive: true });
 }
-function lcDetectors() {   // detectors where the source is actually detected (median flux > 3x its uncertainty)
-  const lc = S.spec?.lightcurve || [];
+function lcDetectors(lc = S.spec?.lightcurve || []) {   // detectors where the source is detected (median flux > 3x its uncertainty)
   return DETS.filter((d) => {
     const g = lc.filter((r) => r.det === d);
     if (g.length < 2) return false;
@@ -882,6 +1010,7 @@ function setHash() {
   else if (t.id) h.set("target", t.id);
   else { h.set("ra", t.ra.toFixed(6)); h.set("dec", t.dec.toFixed(6)); if (t.pmra) h.set("pmra", t.pmra); if (t.pmdec) h.set("pmdec", t.pmdec); if (t.ref_epoch && t.ref_epoch !== 2000) h.set("epoch", t.ref_epoch); if (t.name) h.set("name", t.name); }
   h.set("fov", S.fov); h.set("mode", S.mode); h.set("dets", [...S.dets].join(","));
+  const dr = dateRange(); if (dr.from) h.set("from", dr.from); if (dr.to) h.set("to", dr.to);
   h.set("speed", $("speed").value); if (!$("invert").checked) h.set("invert", "0"); if (+$("zoom").value !== 1) h.set("zoom", $("zoom").value);
   history.replaceState(null, "", "#" + h.toString());
 }
@@ -916,6 +1045,8 @@ async function initFromHash(targets) {
   if (h.get("fov")) setFovOption(+h.get("fov"));
   if (h.get("mode")) S.mode = h.get("mode");
   if (h.get("dets")) S.dets = new Set(h.get("dets").split(",").filter((d) => DETS.includes(d)));
+  if (/^\d{4}-\d{2}-\d{2}$/.test(h.get("from") || "")) $("dFrom").value = h.get("from");
+  if (/^\d{4}-\d{2}-\d{2}$/.test(h.get("to") || "")) $("dTo").value = h.get("to");
   if (h.get("speed")) $("speed").value = h.get("speed");
   if (h.get("invert") === "0") $("invert").checked = false;
   if (h.get("zoom")) $("zoom").value = h.get("zoom");
@@ -957,6 +1088,8 @@ async function main() {
   $("speed").oninput = () => setHash();
   ["ovTarget", "ovGaia", "ovBorder", "ovCand"].forEach((id) => ($(id).onchange = drawOverlay));
   $("ovArch").onchange = () => { rebuildDisplay(); showMotionBadge(); };
+  ["dFrom", "dTo"].forEach((id) => ($(id).onchange = onRangeChange));
+  $("dTo").max = new Date().toISOString().slice(0, 10);
   $("pickLoad").onclick = () => {
     if (!S.pick) return;
     $("qmode").value = "sky";
