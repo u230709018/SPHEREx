@@ -659,13 +659,31 @@ function ensureAladin() {
       A.init.then(() => {
         aladin = A.aladin("#aladin", { survey: $("survey").value, fov: 0.2, projection: "TAN",
           showReticle: false, showLayersControl: false, showGotoControl: false, showFrame: false,
-          showFullscreenControl: true, showCooGridControl: false, showSimbadPointerControl: true });
+          showFullscreenControl: true, showCooGridControl: false, showSimbadPointerControl: false });
+        // Click (not drag) on the map = pick a position that can be loaded in the SPHEREx viewer.
+        aladin.on("click", (e) => {
+          if (!e || e.isDragging || !Number.isFinite(e.ra) || !Number.isFinite(e.dec)) return;
+          pickPosition(e.ra, e.dec);
+        });
         resolve(aladin);
       }).catch(() => resolve(null));
     };
     start();
   });
   return aladinReady;
+}
+function pickPosition(ra, dec) {
+  S.pick = { ra, dec };
+  $("pick").hidden = false;
+  $("pickText").textContent = `Selected: ${sexa(ra, true)} ${sexa(dec)}`;
+  $("pickSimbad").href = `https://simbad.cds.unistra.fr/simbad/sim-coo?Coord=${ra.toFixed(5)}%20${dec.toFixed(5)}&Radius=1&Radius.unit=arcmin`;
+  try {
+    if (!S.pickCat) {
+      S.pickCat = A.catalog({ name: "Selected position", sourceSize: 18, shape: "cross", color: "#39d98a" });
+      aladin.addCatalog(S.pickCat);
+    } else S.pickCat.removeAll?.();
+    S.pickCat.addSources([A.source(ra, dec, { label: "selected" })]);
+  } catch { /* marker is optional */ }
 }
 function propagateJs(t, jyear) {
   const dt = jyear - (t.ref_epoch || 2000);
@@ -678,6 +696,7 @@ async function updateContext() {
   if (!al || !S.result) return;
   const [ny, nx] = S.result.grid.shape, c = S.result.grid.crval;
   al.removeLayers?.();
+  S.pickCat = null; S.pick = null; $("pick").hidden = true;
   if (isMoving()) {
     const pts = S.epochs.map((e) => [e.target_ra, e.target_dec]);
     const ras = pts.map((p) => p[0]), decs = pts.map((p) => p[1]);
@@ -889,6 +908,12 @@ async function main() {
   $("zoom").oninput = () => { render(); setHash(); };
   $("speed").oninput = () => setHash();
   ["ovTarget", "ovGaia", "ovBorder", "ovCand"].forEach((id) => ($(id).onchange = drawOverlay));
+  $("pickLoad").onclick = () => {
+    if (!S.pick) return;
+    $("qmode").value = "sky";
+    loadTarget({ name: null, ra: S.pick.ra, dec: S.pick.dec, pmra: 0, pmdec: 0, ref_epoch: 2000 }, Math.min(+$("fov").value || 5, 12));
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
   $("survey").onchange = async () => {
     const al = await ensureAladin();
     if (!al) return;

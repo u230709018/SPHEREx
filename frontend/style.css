@@ -116,6 +116,9 @@ h1 { font-size: 20px; margin: 0; letter-spacing: .2px; }
 .layout > .context { grid-column: 1; }
 .layout > .side { grid-column: 2; grid-row: 1 / span 2; }
 #aladin { width: 100%; height: 360px; border-radius: 8px; overflow: hidden; margin-top: 8px; background: #05080d; }
+.pick { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 10px; font-size: 13px; font-variant-numeric: tabular-nums; }
+.pick[hidden] { display: none; }
+.time-note { margin: 2px 0 6px; }
 #survey { background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; margin-left: 6px; }
 .plot { width: 100%; height: 300px; }
 .small-plot { height: 220px; }
