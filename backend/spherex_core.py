@@ -312,8 +312,20 @@ def photometry_at(c: Cutout, ra: float, dec: float, r_ap: float = 2.0,
     core_flags = set()
     for yy_, xx_ in zip(*np.nonzero(core)):
         core_flags.update(c.flag_names_at(yi=int(yy_), xi=int(xx_)))
+    saturated = bool(core_flags & SATURATION_FLAGS)
+    method = "aperture"
+    if saturated:
+        # Wing photometry for saturated stars: the unsaturated PSF wings (1.5-5 px) scale with
+        # the total flux, so this gives a reliable *relative* light curve (not an absolute flux).
+        wing = (rr >= 1.5) & (rr <= 5.0) & np.isfinite(c.display)
+        bkg = (rr >= 9.0) & (rr <= 13.0) & np.isfinite(c.display)
+        if wing.sum() >= 12 and bkg.sum() >= 20:
+            b = np.nanmedian(c.display[bkg])
+            flux = (np.nansum(c.display[wing]) - b * wing.sum()) * MJYSR_TO_MJY_PER_PIX
+            err = np.sqrt(np.nansum(np.where(np.isfinite(c.variance[wing]), c.variance[wing], 0))) * MJYSR_TO_MJY_PER_PIX
+            good, method = True, "wings"
     return {"wavelength_um": c.wavelength_at(x, y), "flux_mjy": float(flux),
             "err_mjy": float(err) if err is not None else None,
             "mjd": c.rec.mjd, "epoch": c.rec.epoch, "det": c.rec.det, "obs_id": c.rec.obs_id,
             "flags": flags, "artifact": sorted(set(flags) & ARTIFACT_FLAGS),
-            "saturated": bool(core_flags & SATURATION_FLAGS), "good": good}
+            "saturated": saturated, "method": method, "good": good}

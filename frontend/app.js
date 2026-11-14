@@ -425,13 +425,18 @@ function buildBadges() {
   const pm = Math.hypot(S.target.pmra || 0, S.target.pmdec || 0);
   if (pm > 500) b.push(`<span class="badge warn">High proper motion: ${(pm / 1000).toFixed(1)}″/yr → ${(pm / 1000 * span / 6.15).toFixed(1)} px over the data</span>`);
   b.push(`<span class="badge" id="gaiaBadge">Gaia: checking…</span>`);
+  b.push(`<span class="badge" id="pmBadge"></span>`);
   $("badges").innerHTML = b.join("");
+  showMotionBadge();
 }
 function buildWarnings() {
   const items = [], pts = S.spec.points;
   const sat = pts.filter((p) => p.saturated).length;
   if (pts.length && sat / pts.length > 0.3) {
-    items.push(`<b>Target is saturated</b> in ${sat} of ${pts.length} images (too bright for SPHEREx, roughly K ≲ 8 mag). Its motion is still visible, but its spectrum and light curve are not reliable.`);
+    const wings = pts.filter((p) => p.method === "wings").length;
+    items.push(`<b>Target is saturated</b> in ${sat} of ${pts.length} images (too bright for SPHEREx single exposures). ` +
+      (wings ? `Fluxes are measured on the unsaturated PSF wings, so the <b>light curve is reliable in relative terms</b> (compare within one detector); the spectrum shape is only approximate.`
+             : `Its motion is still visible, but its spectrum and light curve are not reliable.`));
     $("badges").insertAdjacentHTML("beforeend", `<span class="badge warn">Saturated in SPHEREx</span>`);
   }
   const art = {};
@@ -499,6 +504,67 @@ async function fetchAsteroids() {
   } catch { S.ast = null; }
   $("ovAst").disabled = false;
   drawOverlay();
+}
+
+// ---------------------------------------------------------------- measured proper motion
+/* Centroid the target in every visit (near its predicted position) and fit a straight line in
+   time. SPHEREx astrometry is good to <0.3", so even ~1-pixel motions over a year are measurable. */
+function measureMotion() {
+  if (!S.result || isMoving() || S.epochs.length < 3) return null;
+  const [ny, nx] = S.result.grid.shape, pix = Math.abs(S.result.grid.cdelt[0]) * 3600;
+  const dets = S.dets.size ? [...S.dets] : DETS;
+  const pts = [];
+  // Saturated stars have flat/masked cores: centroid the symmetric PSF wings in a wider box.
+  const satFrac = S.result.points.length ? S.result.points.filter((p) => p.saturated).length / S.result.points.length : 0;
+  const hb = satFrac > 0.3 ? 4 : 2;
+  for (const e of S.epochs) {
+    const img = composite(e.epoch, dets);
+    if (!img) continue;
+    const [px, py] = world2pix(e.target_ra, e.target_dec);
+    let best = -Infinity, bx = 0, by = 0;
+    for (let y = Math.round(py) - 3; y <= Math.round(py) + 3; y++)
+      for (let x = Math.round(px) - 3; x <= Math.round(px) + 3; x++) {
+        if (x < 2 || y < 2 || x >= nx - 2 || y >= ny - 2) continue;
+        const v = img[y * nx + x];
+        if (Number.isFinite(v) && v > best) { best = v; bx = x; by = y; }
+      }
+    if (!(best > 3)) continue;           // need a >3-sigma detection
+    if (hb > 2) { bx = Math.round(px); by = Math.round(py); }   // wide box centred on the prediction
+    let sw = 0, sx = 0, sy = 0;
+    for (let y = by - hb; y <= by + hb; y++)
+      for (let x = bx - hb; x <= bx + hb; x++) {
+        if (x < 0 || y < 0 || x >= nx || y >= ny) continue;
+        const v = img[y * nx + x];
+        if (Number.isFinite(v) && v > 0) { sw += v; sx += v * x; sy += v * y; }
+      }
+    if (sw > 0) pts.push({ t: e.jyear, x: sx / sw, y: sy / sw });
+  }
+  if (pts.length < 3) return null;
+  const fit = (key) => {
+    const n = pts.length, mt = pts.reduce((a, p) => a + p.t, 0) / n, mv = pts.reduce((a, p) => a + p[key], 0) / n;
+    let sxx = 0, sxy = 0;
+    pts.forEach((p) => { sxx += (p.t - mt) ** 2; sxy += (p.t - mt) * (p[key] - mv); });
+    const b = sxy / sxx, res = pts.reduce((a, p) => a + (p[key] - mv - b * (p.t - mt)) ** 2, 0);
+    return { slope: b, err: Math.sqrt(res / Math.max(1, n - 2) / sxx) };
+  };
+  const fx = fit("x"), fy = fit("y");
+  // grid x grows westward (cdelt1 < 0): +x = -RA direction
+  const pmra = -fx.slope * pix, pmdec = fy.slope * pix;
+  const err = Math.hypot(fx.err, fy.err) * pix / Math.SQRT2;
+  return { pmra, pmdec, total: Math.hypot(pmra, pmdec), err: Math.max(err, 0.3 / (S.epochs.at(-1).jyear - S.epochs[0].jyear)),
+           n: pts.length, span: pts.at(-1).t - pts[0].t };
+}
+function showMotionBadge() {
+  const m = measureMotion(), el = $("pmBadge");
+  if (!el) return;
+  if (!m) { el.remove(); return; }
+  const cat = Math.hypot(S.target.pmra || 0, S.target.pmdec || 0) / 1000;
+  const sig = m.total / m.err;
+  el.className = "badge " + (sig > 3 ? "good" : "");
+  el.title = `Centroid fit over ${m.n} visits spanning ${m.span.toFixed(2)} yr: μα* = ${m.pmra.toFixed(2)}″/yr, μδ = ${m.pmdec.toFixed(2)}″/yr`;
+  el.textContent = sig > 3
+    ? `Measured by SPHEREx: ${m.total.toFixed(1)} ± ${m.err.toFixed(1)}″/yr${cat > 0.05 ? ` (catalogue ${cat.toFixed(1)}″/yr)` : " – moving!"}`
+    : `Measured by SPHEREx: no significant motion (< ${(3 * m.err).toFixed(1)}″/yr)`;
 }
 
 // ---------------------------------------------------------------- Aladin sky context
@@ -632,7 +698,14 @@ function plotLightcurve() {
       hovertemplate: `${d}: %{y:.2f}× median<br>%{x}<extra></extra>` });
   });
   Plotly.react("lcPlot", traces, { ...PLOT_LAYOUT, xaxis: { ...PLOT_LAYOUT.xaxis, type: "date" },
-    yaxis: { ...PLOT_LAYOUT.yaxis, title: "Flux / median" } }, { displayModeBar: false, responsive: true });
+    yaxis: { ...PLOT_LAYOUT.yaxis, title: "Flux / median", type: lcLog() ? "log" : "linear" } }, { displayModeBar: false, responsive: true });
+}
+function lcLog() {   // large-amplitude variables (e.g. Miras) read better on a log axis
+  const lc = S.spec?.lightcurve || [];
+  return DETS.some((d) => {
+    const f = lc.filter((r) => r.det === d && r.flux_mjy > 0).map((r) => r.flux_mjy);
+    return f.length > 2 && Math.max(...f) / Math.min(...f) > 4;
+  });
 }
 function mjdToDate(m) { return new Date((m - 40587) * 86400000).toISOString().slice(0, 10); }
 

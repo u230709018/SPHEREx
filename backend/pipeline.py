@@ -21,7 +21,7 @@ import spherex_core as sx
 RESULTS_DIR = sx.ROOT / "data" / "results"
 _CUTOUT_LRU: "OrderedDict[str, list[sx.Cutout]]" = OrderedDict()
 _LRU_LOCK = threading.Lock()
-PIPELINE_VERSION = 4
+PIPELINE_VERSION = 5
 
 
 def job_key(p: dict) -> str:
