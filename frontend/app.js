@@ -394,9 +394,10 @@ function showProgress(on, msg, frac) {
   if (msg) $("progressMsg").textContent = msg;
   if (frac != null) $("progressBar").style.width = `${Math.round(frac * 100)}%`;
 }
-// First look: 3 images per visit and detector (fast); "Sharper images" fetches up to 8.
+// New fields load at full quality (up to 8 images per visit and detector, ~1 min on the live site).
+// Results made with fewer images (QUICK, older links) get a "Sharper images" button.
 const QUICK = { max_per_cell: 3, budget: 120 }, FULL = { max_per_cell: 8, budget: 260 };
-async function loadTarget(t, fov, quality = QUICK) {
+async function loadTarget(t, fov, quality = FULL) {
   S.target = t; S.fov = fov; S.gaia = null; S.ast = null; S.spec = null; S.specLabel = null;
   $("ovAst").checked = false; $("candidates").hidden = true;
   $("empty").hidden = true; $("targetName").textContent = t.name || `${sexa(t.ra, true)} ${sexa(t.dec)}`;
