@@ -124,6 +124,7 @@ def spectrum_and_lightcurve(cutouts, positions_by_epoch=None, ra=None, dec=None,
     return {"points": pts, "lightcurve": lc}
 
 
+PREVIEW_PER_CELL = 3                         # images per (visit, detector) in the first preview
 KEY_EXCLUDE = ("name", "priority_dets")      # request fields that do not change the final result
 
 
@@ -170,9 +171,18 @@ def run_frames_job(p: dict, progress, publish=None) -> dict:
     prio = [d for d in (p.get("priority_dets") or []) if d in sx.DETECTORS] or ["D5", "D6"]
     ep_ids = sorted({r.epoch for r in chosen})
     ends = {ep_ids[0], ep_ids[-1]}
+    # Preview: at most PREVIEW_PER_CELL images (spread in time) of each on-screen detector in the
+    # first and last visit; the rest of those cells is added in the "visits" stage.
+    preview = []
+    for ep in sorted(ends):
+        for det in prio:
+            cell = [r for r in chosen if r.epoch == ep and r.det == det]
+            idx = sorted(set(np.linspace(0, len(cell) - 1, min(PREVIEW_PER_CELL, len(cell))).round().astype(int))) if cell else []
+            preview += [cell[i] for i in idx]
+    in_preview = {id(r) for r in preview}
     groups = [g for g in (
-        ("preview", [r for r in chosen if r.det in prio and r.epoch in ends]),
-        ("visits", [r for r in chosen if r.det in prio and r.epoch not in ends]),
+        ("preview", preview),
+        ("visits", [r for r in chosen if r.det in prio and id(r) not in in_preview]),
         ("final", [r for r in chosen if r.det not in prio])) if g[1]]
 
     def assemble(cutouts, frames, phot=None, partial=None):
@@ -199,9 +209,11 @@ def run_frames_job(p: dict, progress, publish=None) -> dict:
             res["visits_total"] = len(ep_ids)
         return res, ep_meta, track
 
-    # All downloads are queued at once in priority order (a FIFO pool works through group 1 first),
-    # so later groups download while earlier ones are being processed.
+    # The preview downloads alone (on a small server the CPU is the bottleneck, so anything running
+    # beside it only delays the first frames); the later groups are queued together right after it,
+    # in priority order, and download while earlier groups are processed.
     cutouts, frames, rejected = [], {}, {"failed": 0, "transient": 0}
+    by_cell: dict = {}
     n_done = [0]
     done_lock = threading.Lock()
 
@@ -214,8 +226,8 @@ def run_frames_job(p: dict, progress, publish=None) -> dict:
         return path
 
     pool = ThreadPoolExecutor(max_workers=24)
-    futures = [(label, [(rec, pool.submit(fetch, rec)) for rec in grp]) for label, grp in groups]
-    for label, items in futures:
+    futures = [(groups[0][0], [(rec, pool.submit(fetch, rec)) for rec in groups[0][1]])]
+    for gi, (label, items) in enumerate(futures):
         new = []
         for rec, fut in items:
             path = fut.result()
@@ -227,13 +239,19 @@ def run_frames_job(p: dict, progress, publish=None) -> dict:
             else:
                 new.append(c)
         cutouts += new
-        if new:
-            frames.update(sx.build_frames(new, grid, shape))
+        touched = set()
+        for c in new:
+            by_cell.setdefault((c.rec.epoch, c.rec.det), []).append(c)
+            touched.add((c.rec.epoch, c.rec.det))
+        if touched:                       # rebuild only the frames that got new images
+            frames.update(sx.build_frames([c for k in touched for c in by_cell[k]], grid, shape))
         if publish and label != "final" and frames:
             try:
                 publish(assemble(cutouts, frames, partial=label)[0])
             except Exception:
                 pass                        # a preview must never break the job
+        if gi == 0:                       # preview on screen: queue everything else now
+            futures += [(lb, [(rec, pool.submit(fetch, rec)) for rec in grp]) for lb, grp in groups[1:]]
     pool.shutdown(wait=False)
     if not cutouts:
         raise RuntimeError("All cutouts failed to download; the archive may be overloaded. Try again shortly.")
