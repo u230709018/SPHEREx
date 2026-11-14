@@ -52,6 +52,7 @@ class FramesRequest(BaseModel):
     max_per_cell: int = Field(8, ge=2, le=40)
     budget: int = Field(260, ge=20, le=1200)
     name: str | None = None
+    priority_dets: list[str] | None = Field(None, max_length=6)   # detectors on screen: processed first
 
 
 class MovingRequest(BaseModel):
@@ -70,8 +71,13 @@ def _set(job_id, **kw):
 def _run(job_id: str, params: dict, fn=None):
     def progress(stage, i, n, msg):
         _set(job_id, stage=stage, done=i, total=n, message=msg)
+
+    def publish(partial):
+        with JOBS_LOCK:
+            JOBS[job_id]["partial"] = partial
+            JOBS[job_id]["partial_n"] = JOBS[job_id].get("partial_n", 0) + 1
     try:
-        res = (fn or pl.run_frames_job)(params, progress)
+        res = fn(params, progress) if fn else pl.run_frames_job(params, progress, publish)
         _set(job_id, status="done", result_key=res["key"], message="Done")
     except mv.AmbiguousName as err:
         _set(job_id, status="error", message=str(err), candidates=err.candidates)
@@ -97,7 +103,7 @@ def resolve(q: str = Query(..., min_length=1)):
 @app.post("/api/frames")
 def frames(req: FramesRequest):
     params = req.model_dump()
-    params_for_key = {k: v for k, v in params.items() if k != "name"}
+    params_for_key = {k: v for k, v in params.items() if k not in pl.KEY_EXCLUDE}
     key = pl.job_key(params_for_key)
     # A sharper (more images per visit) result of the same field is always good enough.
     for mpc, bud in ((8, 260), (params["max_per_cell"], params["budget"])):
@@ -108,7 +114,7 @@ def frames(req: FramesRequest):
     with JOBS_LOCK:
         JOBS[job_id] = {"status": "running", "stage": "queued", "done": 0, "total": 1,
                         "message": "Queued...", "params": params}
-    EXECUTOR.submit(_run, job_id, params_for_key | {"name": params.get("name")})
+    EXECUTOR.submit(_run, job_id, params_for_key | {"name": params.get("name"), "priority_dets": params.get("priority_dets")})
     return {"status": "running", "job_id": job_id}
 
 
@@ -132,7 +138,18 @@ def job(job_id: str):
         j = JOBS.get(job_id)
         if not j:
             raise HTTPException(404, "Unknown job")
-        return {k: v for k, v in j.items() if k != "params"}
+        return {k: v for k, v in j.items() if k not in ("params", "partial")}
+
+
+@app.get("/api/jobs/{job_id}/partial")
+def job_partial(job_id: str):
+    """Frames finished so far (first and last visit first), so the page can start blinking early."""
+    with JOBS_LOCK:
+        j = JOBS.get(job_id)
+        part = j.get("partial") if j else None
+    if part is None:
+        raise HTTPException(404, "No partial result yet")
+    return JSONResponse(part)
 
 
 @app.get("/api/result/{key}")

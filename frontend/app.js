@@ -405,7 +405,8 @@ async function loadTarget(t, fov, quality = FULL) {
   $("targetInfo").textContent = `${t.kind ? t.kind + " · " : ""}RA ${sexa(t.ra, true)} Dec ${sexa(t.dec)} (epoch ${t.ref_epoch || 2000})${pm > 50 ? ` · moves ${(pm / 1000).toFixed(2)}″/yr` : ""}`;
   setHash();
   const body = { ra: t.ra, dec: t.dec, pmra: t.pmra || 0, pmdec: t.pmdec || 0, ref_epoch: t.ref_epoch || 2000,
-                 fov_arcmin: fov, ...quality, name: t.name || null };
+                 fov_arcmin: fov, ...quality, name: t.name || null,
+                 priority_dets: S.dets.size && S.dets.size < 6 ? [...S.dets] : null };
   runJob("/api/frames", body, "Could not load this field.");
 }
 async function loadObject(name, fov) {
@@ -424,21 +425,39 @@ async function runJob(path, body, failMsg) {
   const token = Symbol(); S.pending = token;
   try {
     let r = await api(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    let seen = 0, showing = false;           // partial results already shown (first/last visit, then all visits)
     while (r.status === "running") {
-      await new Promise((res) => setTimeout(res, 1500));
+      await new Promise((res) => setTimeout(res, 1000));
       if (S.pending !== token) return;
       const j = await api(`/api/jobs/${r.job_id}`);
-      const frac = j.stage === "download" ? 0.1 + 0.75 * (j.done / Math.max(1, j.total)) : j.stage === "process" ? 0.9 : 0.05;
-      showProgress(true, j.message, frac);
       if (j.status === "error") { const e = new Error(j.message); e.candidates = j.candidates; throw e; }
-      if (j.status === "done") r = { status: "done", result_key: j.result_key };
+      if (j.status === "done") { r = { status: "done", result_key: j.result_key }; break; }
+      if ((j.partial_n || 0) > seen) {
+        seen = j.partial_n;
+        try {
+          const part = await api(`/api/jobs/${r.job_id}/partial`);
+          if (S.pending !== token) return;
+          onResult(part, { partial: true });
+          showing = true;
+        } catch { /* the full result will still arrive */ }
+      }
+      const frac = j.stage === "download" ? 0.1 + 0.75 * (j.done / Math.max(1, j.total)) : j.stage === "process" ? 0.9 : 0.05;
+      if (showing) liveStatus(liveText(j));
+      else showProgress(true, j.message, frac);
     }
-    showProgress(true, "Rendering…", 0.97);
+    if (showing) liveStatus("Finishing: spectrum and light curve…");
+    else showProgress(true, "Rendering…", 0.97);
     const res = await api(`/api/result/${r.result_key}`);
     if (S.pending !== token) return;
+    liveStatus(null);
     onResult(res);
   } catch (err) {
-    showProgress(false);
+    showProgress(false); liveStatus(null);
+    if (S.result && S.result.partial) {        // keep the frames we already have on screen
+      $("specTitle").textContent = "Spectrum unavailable";
+      $("badges").insertAdjacentHTML("afterbegin", `<span class="badge warn">Stopped early: ${err.message}</span>`);
+      return;
+    }
     $("empty").hidden = false;
     $("empty").innerHTML = `<p><b>${failMsg}</b><br>${err.message}</p>`;
     if (err.candidates) {
@@ -450,9 +469,31 @@ async function runJob(path, body, failMsg) {
   }
 }
 const isMoving = () => S.result && S.result.mode === "moving";
-function onResult(res) {
-  S.result = res; S.key = res.key; S.epochs = S.sph = res.epochs; S.cur = 0; S.arch = null;
+function liveStatus(text) {
+  $("liveStatus").hidden = !text;
+  if (text) $("liveStatusText").textContent = text;
+}
+function liveText(j) {
+  const r = S.result, got = r && r.partial ? `${r.epochs.length} of ${r.visits_total} visits on screen` : "";
+  return `${got}${got ? " · " : ""}${j.stage === "download" ? `loading images ${j.done}/${j.total}` : "measuring the spectrum"}…`;
+}
+function onResult(res, opt = {}) {
+  // Updates of the same field (partial -> more visits -> final) keep the frame being shown and the player state.
+  const same = Boolean(S.result && S.result.partial && S.result.key === res.key);
+  const curId = same ? S.epochs[S.cur]?.epoch : null;
+  S.result = res; S.key = res.key; S.epochs = S.sph = res.epochs; S.arch = null;
+  S.cur = same ? Math.max(0, res.epochs.findIndex((e) => e.epoch === curId)) : 0;
   S.sphIdx = new Map(res.epochs.map((e, i) => [e.epoch, i]));
+  if (opt.partial) {
+    normaliseFrames();
+    buildTimeline(); if (!same) buildDetButtons(); rebuildDisplay();
+    showProgress(false); $("empty").hidden = true;
+    S.spec = { points: [], lightcurve: [] };
+    $("specTitle").textContent = "Spectrum (measuring…)"; $("specReset").hidden = true;
+    plotSpectrum(); plotLightcurve(); buildBadges(); buildLinks();
+    if (!same) { updateContext(); S.ctxKey = res.key; play(true); }
+    return;
+  }
   if (res.mode === "moving") {
     S.dets = new Set(DETS);                 // each frame is a single detector image
     if (S.mode === "diff" || S.mode === "cdiff") S.mode = "blink";
@@ -468,8 +509,9 @@ function onResult(res) {
   $("specTitle").textContent = "Spectrum at target"; $("specReset").hidden = true;
   plotSpectrum(); plotLightcurve(); buildBadges(); buildWarnings(); buildLinks();
   if (!isMoving()) { fetchGaia(); fetchArchival(); }
-  updateContext();
-  play(true);
+  if (S.ctxKey !== res.key) updateContext();
+  S.ctxKey = res.key;
+  if (!same) play(true);
 }
 function buildTimeline() {
   const tl = $("timeline"); tl.innerHTML = "";

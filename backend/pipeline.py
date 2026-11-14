@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import threading
+from concurrent.futures import ThreadPoolExecutor
 import time
 from collections import OrderedDict
 
@@ -123,10 +124,34 @@ def spectrum_and_lightcurve(cutouts, positions_by_epoch=None, ra=None, dec=None,
     return {"points": pts, "lightcurve": lc}
 
 
-def run_frames_job(p: dict, progress) -> dict:
-    """p: ra, dec, pmra, pmdec, ref_epoch, fov_arcmin, max_per_cell, budget, name."""
+KEY_EXCLUDE = ("name", "priority_dets")      # request fields that do not change the final result
+
+
+def _epoch_meta(cutouts, records) -> list[dict]:
+    out = []
+    for ep in sorted({c.rec.epoch for c in cutouts}):
+        cs = [c for c in cutouts if c.rec.epoch == ep]
+        mjds = [c.rec.mjd for c in cs]
+        out.append({"epoch": ep, "mjd": float(np.mean(mjds)),
+                    "jyear": cat.mjd_to_jyear(float(np.mean(mjds))),
+                    "date_start": Time(min(mjds), format="mjd").iso[:10],
+                    "date_end": Time(max(mjds), format="mjd").iso[:10],
+                    "n_images": len(cs),
+                    "n_available": sum(1 for r in records if r.epoch == ep),
+                    "dets": sorted({c.rec.det for c in cs})})
+    return out
+
+
+def run_frames_job(p: dict, progress, publish=None) -> dict:
+    """p: ra, dec, pmra, pmdec, ref_epoch, fov_arcmin, max_per_cell, budget, name, priority_dets.
+
+    Work is done in three groups so the browser can start blinking early (publish(partial)):
+      1. "preview": the detectors on screen (priority_dets), first and last visit only
+      2. "visits":  the same detectors, every other visit
+      3. final:     the remaining detectors, then the spectrum and light curve
+    Each (visit, detector) frame belongs to exactly one group, so frames are built once."""
     t0 = time.time()
-    key = job_key({k: v for k, v in p.items() if k != "name"})
+    key = job_key({k: v for k, v in p.items() if k not in KEY_EXCLUDE})
     size_deg = p["fov_arcmin"] / 60.0
 
     # Centre the field on the target's position in the middle of the SPHEREx data range.
@@ -140,64 +165,88 @@ def run_frames_job(p: dict, progress) -> dict:
     n_total = len(records)
     chosen = sx.budget_select(records, p.get("max_per_cell", 8), p.get("budget", 260))
     progress("query", 1, 1, f"{n_total} images in {len(epochs)} visits; downloading {len(chosen)}")
+    grid, shape = sx.make_grid(ra_mid, dec_mid, size_deg)
 
-    paths = sx.fetch_all(chosen, ra_mid, dec_mid, size_deg,
-                         progress=lambda i, n: progress("download", i, n, f"Downloading cutouts {i}/{n}"))
+    prio = [d for d in (p.get("priority_dets") or []) if d in sx.DETECTORS] or ["D5", "D6"]
+    ep_ids = sorted({r.epoch for r in chosen})
+    ends = {ep_ids[0], ep_ids[-1]}
+    groups = [g for g in (
+        ("preview", [r for r in chosen if r.det in prio and r.epoch in ends]),
+        ("visits", [r for r in chosen if r.det in prio and r.epoch not in ends]),
+        ("final", [r for r in chosen if r.det not in prio])) if g[1]]
 
-    progress("process", 0, 1, "Cleaning images (zodiacal light, bad pixels)...")
-    cutouts, rejected = [], {"failed": 0, "transient": 0}
-    for rec in chosen:
-        path = paths.get(rec.uri)
-        c = sx.load_cutout(rec, path) if path else None
-        if c is None:
-            rejected["failed"] += 1
-        elif c.n_transient > sx.MAX_TRANSIENT_PIXELS:
-            rejected["transient"] += 1
-        else:
-            cutouts.append(c)
+    def assemble(cutouts, frames, phot=None, partial=None):
+        ep_meta = _epoch_meta(cutouts, records)
+        track = target_track(p, [e["mjd"] for e in ep_meta])
+        res = {
+            "key": key, "name": p.get("name"),
+            "target": {k: p.get(k) for k in ("ra", "dec", "pmra", "pmdec", "ref_epoch")},
+            "fov_arcmin": p["fov_arcmin"],
+            "quality": {"max_per_cell": p.get("max_per_cell", 8), "budget": p.get("budget", 260)},
+            "grid": {"crval": [ra_mid, dec_mid], "crpix": list(grid.wcs.crpix), "cdelt": list(grid.wcs.cdelt),
+                     "shape": list(shape)},
+            "epochs": [e | {"target_ra": t[0], "target_dec": t[1]} for e, t in zip(ep_meta, track)],
+            "frames": [{"epoch": ep, "det": det, "n": n, "data": sx.b64f32(arr)}
+                       for (ep, det), (arr, n) in sorted(frames.items())],
+            "images": [{"uri": c.rec.uri, "mjd": c.rec.mjd, "det": c.rec.det, "epoch": c.rec.epoch,
+                        "obs_id": c.rec.obs_id} for c in cutouts],
+            "stats": {"n_total": n_total, "n_downloaded": len(chosen), "n_used": len(cutouts),
+                      "rejected": dict(rejected), "seconds": round(time.time() - t0, 1)},
+            **(phot or {"points": [], "lightcurve": []}),
+        }
+        if partial:
+            res["partial"] = partial
+            res["visits_total"] = len(ep_ids)
+        return res, ep_meta, track
+
+    # All downloads are queued at once in priority order (a FIFO pool works through group 1 first),
+    # so later groups download while earlier ones are being processed.
+    cutouts, frames, rejected = [], {}, {"failed": 0, "transient": 0}
+    n_done = [0]
+    done_lock = threading.Lock()
+
+    def fetch(rec):
+        path = sx.fetch_cutout(sx.cutout_url(rec, ra_mid, dec_mid, size_deg))
+        with done_lock:
+            n_done[0] += 1
+            k = n_done[0]
+        progress("download", k, len(chosen), f"Downloading cutouts {k}/{len(chosen)}")
+        return path
+
+    pool = ThreadPoolExecutor(max_workers=24)
+    futures = [(label, [(rec, pool.submit(fetch, rec)) for rec in grp]) for label, grp in groups]
+    for label, items in futures:
+        new = []
+        for rec, fut in items:
+            path = fut.result()
+            c = sx.load_cutout(rec, path) if path else None
+            if c is None:
+                rejected["failed"] += 1
+            elif c.n_transient > sx.MAX_TRANSIENT_PIXELS:
+                rejected["transient"] += 1
+            else:
+                new.append(c)
+        cutouts += new
+        if new:
+            frames.update(sx.build_frames(new, grid, shape))
+        if publish and label != "final" and frames:
+            try:
+                publish(assemble(cutouts, frames, partial=label)[0])
+            except Exception:
+                pass                        # a preview must never break the job
+    pool.shutdown(wait=False)
     if not cutouts:
-        raise RuntimeError("All cutouts failed to download; IRSA may be overloaded. Try again shortly.")
+        raise RuntimeError("All cutouts failed to download; the archive may be overloaded. Try again shortly.")
     _remember(key, cutouts)
 
-    progress("process", 0, 1, "Aligning images on a common north-up grid...")
-    grid, shape = sx.make_grid(ra_mid, dec_mid, size_deg)
-    frames = sx.build_frames(cutouts, grid, shape)
-
-    used_epochs = sorted({c.rec.epoch for c in cutouts})
-    ep_meta = []
-    for ep in used_epochs:
-        cs = [c for c in cutouts if c.rec.epoch == ep]
-        mjds = [c.rec.mjd for c in cs]
-        ep_meta.append({"epoch": ep, "mjd": float(np.mean(mjds)),
-                        "jyear": cat.mjd_to_jyear(float(np.mean(mjds))),
-                        "date_start": Time(min(mjds), format="mjd").iso[:10],
-                        "date_end": Time(max(mjds), format="mjd").iso[:10],
-                        "n_images": len(cs),
-                        "n_available": sum(1 for r in records if r.epoch == ep),
-                        "dets": sorted({c.rec.det for c in cs})})
+    progress("process", 1, 1, "Measuring the spectrum and light curve (PSF fit, Gaia-deblended)...")
+    ep_meta = _epoch_meta(cutouts, records)
     track = target_track(p, [e["mjd"] for e in ep_meta])
     pos_by_epoch = {e["epoch"]: t for e, t in zip(ep_meta, track)}
-
-    progress("process", 1, 1, "Measuring the spectrum and light curve (PSF fit, Gaia-deblended)...")
     nbrs = gaia_neighbors(key, ra_mid, dec_mid, p["fov_arcmin"], ep_meta)
     phot = spectrum_and_lightcurve(cutouts, positions_by_epoch=pos_by_epoch,
                                    neighbors_by_epoch=nbrs, method="psf")
-
-    result = {
-        "key": key, "name": p.get("name"), "target": {k: p.get(k) for k in ("ra", "dec", "pmra", "pmdec", "ref_epoch")},
-        "fov_arcmin": p["fov_arcmin"],
-        "quality": {"max_per_cell": p.get("max_per_cell", 8), "budget": p.get("budget", 260)},
-        "grid": {"crval": [ra_mid, dec_mid], "crpix": list(grid.wcs.crpix), "cdelt": list(grid.wcs.cdelt),
-                 "shape": list(shape)},
-        "epochs": [e | {"target_ra": t[0], "target_dec": t[1]} for e, t in zip(ep_meta, track)],
-        "frames": [{"epoch": ep, "det": det, "n": n, "data": sx.b64f32(arr)}
-                   for (ep, det), (arr, n) in sorted(frames.items())],
-        "images": [{"uri": c.rec.uri, "mjd": c.rec.mjd, "det": c.rec.det, "epoch": c.rec.epoch,
-                    "obs_id": c.rec.obs_id} for c in cutouts],
-        "stats": {"n_total": n_total, "n_downloaded": len(chosen), "n_used": len(cutouts),
-                  "rejected": rejected, "seconds": round(time.time() - t0, 1)},
-        **phot,
-    }
+    result = assemble(cutouts, frames, phot=phot)[0]
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     (RESULTS_DIR / f"{key}.json").write_text(json.dumps(result))
     return result
