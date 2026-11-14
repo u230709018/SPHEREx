@@ -423,7 +423,17 @@ function showProgress(on, msg, frac) {
 // New fields load at full quality (up to 8 images per visit and detector, ~1 min on the live site).
 // Results made with fewer images (QUICK, older links) get a "Sharper images" button.
 const QUICK = { max_per_cell: 3, budget: 120 }, FULL = { max_per_cell: 8, budget: 260 };
+function clearCharts() {   // a new field is loading: do not leave the previous target's charts on screen
+  S.spec = { points: [], lightcurve: [] };
+  $("specTitle").textContent = "Spectrum (waiting for images…)"; $("specReset").hidden = true;
+  if (window.Plotly) {
+    ["specPlot", "lcPlot"].forEach((id) => Plotly.react(id, [], { ...PLOT_LAYOUT, annotations: [{ xref: "paper", yref: "paper", x: 0.5, y: 0.5,
+      showarrow: false, text: "waiting for the first measurements…", font: { size: 11, color: "#8e9bb3" } }] }, { displayModeBar: false, responsive: true }));
+  }
+  S.spec = null;
+}
 async function loadTarget(t, fov, quality = FULL) {
+  clearCharts();
   S.target = t; S.fov = fov; S.gaia = null; S.ast = null; S.spec = null; S.specLabel = null;
   $("ovAst").checked = false; $("candidates").hidden = true;
   $("empty").hidden = true; $("targetName").textContent = t.name || `${sexa(t.ra, true)} ${sexa(t.dec)}`;
@@ -437,6 +447,7 @@ async function loadTarget(t, fov, quality = FULL) {
   runJob("/api/frames", body, "Could not load this field.");
 }
 async function loadObject(name, fov) {
+  clearCharts();
   S.target = { name, sso: true, pmra: 0, pmdec: 0 }; S.fov = Math.min(fov || 4, 15); setFovOption(S.fov);
   S.gaia = null; S.ast = null; S.spec = null; S.specLabel = null; $("ovAst").checked = false;
   $("empty").hidden = true; $("candidates").hidden = true;
@@ -932,22 +943,44 @@ function plotLightcurve() {
   if (!window.Plotly || !S.spec) return;
   const vis = new Set(S.epochs.map((e) => e.epoch));
   const lc = S.spec.lightcurve.filter((r) => vis.has(r.epoch)), traces = [], used = lcDetectors(lc);
-  used.forEach((d) => {
-    const g = lc.filter((r) => r.det === d);
-    const med = [...g.map((r) => r.flux_mjy)].sort((a, b) => a - b)[g.length >> 1] || 1;
-    const norm = Math.abs(med) > 1e-6 ? med : 1;
-    traces.push({ x: g.map((r) => mjdToDate(r.mjd)), y: g.map((r) => r.flux_mjy / norm), mode: "lines+markers", type: "scatter", name: d,
-      line: { color: DET_COLORS[d], width: 1.5 }, marker: { size: 7 },
-      error_y: { type: "data", array: g.map((r) => (r.err_mjy || 0) / Math.abs(norm)), visible: true, thickness: 1, width: 0 },
-      hovertemplate: `${d}: %{y:.2f}× median<br>%{x}<extra></extra>` });
-  });
-  const skipped = DETS.filter((d) => lc.some((r) => r.det === d) && !used.includes(d));
   const ep = S.epochs.filter((e) => !e.archival), pad = 12;
   const xr = ep.length ? [mjdToDate(Math.min(...ep.map((e) => e.mjd)) - pad), mjdToDate(Math.max(...ep.map((e) => e.mjd)) + pad)] : undefined;
-  Plotly.react("lcPlot", traces, { ...PLOT_LAYOUT, xaxis: { ...PLOT_LAYOUT.xaxis, type: "date", range: xr },
-    yaxis: { ...PLOT_LAYOUT.yaxis, title: "Flux / median", type: lcLog() ? "log" : "linear" },
-    annotations: skipped.length ? [{ xref: "paper", yref: "paper", x: 1, y: 1.02, xanchor: "right", yanchor: "bottom", showarrow: false,
-      text: `not detected in ${skipped.join(", ")}`, font: { size: 10, color: "#8e9bb3" } }] : [] }, { displayModeBar: false, responsive: true });
+  const note = (text) => ({ xref: "paper", yref: "paper", x: 1, y: 1.02, xanchor: "right", yanchor: "bottom", showarrow: false,
+    text, font: { size: 10, color: "#8e9bb3" } });
+  let yaxis, annotations = [], shapes = [];
+  if (used.length) {
+    // source detected: each detector normalised to its median, so variability in different colours can be compared
+    used.forEach((d) => {
+      const g = lc.filter((r) => r.det === d);
+      const med = [...g.map((r) => r.flux_mjy)].sort((a, b) => a - b)[g.length >> 1] || 1;
+      const norm = Math.abs(med) > 1e-6 ? med : 1;
+      traces.push({ x: g.map((r) => mjdToDate(r.mjd)), y: g.map((r) => r.flux_mjy / norm), mode: "lines+markers", type: "scatter", name: d,
+        line: { color: DET_COLORS[d], width: 1.5 }, marker: { size: 7 },
+        error_y: { type: "data", array: g.map((r) => (r.err_mjy || 0) / Math.abs(norm)), visible: true, thickness: 1, width: 0 },
+        hovertemplate: `${d}: %{y:.2f}× median<br>%{x}<extra></extra>` });
+    });
+    const skipped = DETS.filter((d) => lc.some((r) => r.det === d) && !used.includes(d));
+    if (skipped.length) annotations.push(note(`not detected in ${skipped.join(", ")}`));
+    yaxis = { ...PLOT_LAYOUT.yaxis, title: "Flux / median", type: lcLog() ? "log" : "linear" };
+  } else if (lc.length) {
+    // nothing detected (empty sky or a very faint source): show the measured fluxes in mJy around zero
+    DETS.forEach((d) => {
+      const g = lc.filter((r) => r.det === d);
+      if (!g.length) return;
+      traces.push({ x: g.map((r) => mjdToDate(r.mjd)), y: g.map((r) => r.flux_mjy), mode: "lines+markers", type: "scatter", name: d,
+        line: { color: DET_COLORS[d], width: 1, dash: "dot" }, marker: { size: 6 }, opacity: 0.85,
+        error_y: { type: "data", array: g.map((r) => r.err_mjy || 0), visible: true, thickness: 1, width: 0 },
+        hovertemplate: `${d}: %{y:.3f} mJy<br>%{x}<extra></extra>` });
+    });
+    shapes = [{ type: "line", xref: "paper", x0: 0, x1: 1, yref: "y", y0: 0, y1: 0, line: { color: "rgba(200,210,230,.4)", width: 1 } }];
+    annotations.push(note(S.result && S.result.partial ? "no clear source yet – still measuring" : "No source detected here – click a star in the image to see its light curve"));
+    yaxis = { ...PLOT_LAYOUT.yaxis, title: "Flux (mJy)", type: "linear", zeroline: false };
+  } else {
+    annotations.push(note(S.result && S.result.partial ? "waiting for the first measurements…" : "no measurements in this date range"));
+    yaxis = { ...PLOT_LAYOUT.yaxis, title: "Flux / median", type: "linear" };
+  }
+  Plotly.react("lcPlot", traces, { ...PLOT_LAYOUT, xaxis: { ...PLOT_LAYOUT.xaxis, type: "date", range: xr }, yaxis, annotations, shapes },
+    { displayModeBar: false, responsive: true });
 }
 function lcDetectors(lc = S.spec?.lightcurve || []) {   // detectors where the source is detected (median flux > 3x its uncertainty)
   return DETS.filter((d) => {
