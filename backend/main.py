@@ -134,10 +134,13 @@ def result(key: str):
 @app.get("/api/spectrum/{key}")
 def spectrum(key: str, ra: float, dec: float):
     """Spectrum + light curve at any position inside an already loaded field."""
+    res = pl.cached_result(key)
     cutouts = pl.cutouts_for(key, {})
-    if not cutouts:
+    if not res or not cutouts:
         raise HTTPException(404, "Field not loaded")
-    return pl.spectrum_and_lightcurve(cutouts, ra=ra, dec=dec)
+    nbrs = pl.gaia_neighbors(key, res["grid"]["crval"][0], res["grid"]["crval"][1],
+                             res["fov_arcmin"], res["epochs"])
+    return pl.spectrum_and_lightcurve(cutouts, ra=ra, dec=dec, neighbors_by_epoch=nbrs, method="psf")
 
 
 @app.get("/api/gaia")

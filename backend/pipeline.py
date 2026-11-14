@@ -21,7 +21,7 @@ import spherex_core as sx
 RESULTS_DIR = sx.ROOT / "data" / "results"
 _CUTOUT_LRU: "OrderedDict[str, list[sx.Cutout]]" = OrderedDict()
 _LRU_LOCK = threading.Lock()
-PIPELINE_VERSION = 5
+PIPELINE_VERSION = 6
 
 
 def job_key(p: dict) -> str:
@@ -68,7 +68,30 @@ def target_track(p: dict, mjds: list[float]) -> list[tuple[float, float]]:
                           p.get("ref_epoch", 2000.0), cat.mjd_to_jyear(m)) for m in mjds]
 
 
-def spectrum_and_lightcurve(cutouts, positions_by_epoch=None, ra=None, dec=None) -> dict:
+_GAIA: "OrderedDict[str, dict]" = OrderedDict()
+
+
+def gaia_neighbors(key: str, ra0: float, dec0: float, fov_arcmin: float, ep_meta: list[dict]) -> dict:
+    """Gaia DR3 positions in the field, propagated to every visit: {epoch: [(ra, dec), ...]}.
+    Used to deblend the target's PSF photometry from known neighbours."""
+    with _LRU_LOCK:
+        if key in _GAIA:
+            return _GAIA[key]
+    out: dict = {}
+    try:
+        g = cat.gaia_sources(ra0, dec0, fov_arcmin / 60 * 0.75, [e["jyear"] for e in ep_meta], gmax=20.5)
+        out = {e["epoch"]: [s["positions"][i] for s in g["sources"]] for i, e in enumerate(ep_meta)}
+    except Exception:
+        out = {}
+    with _LRU_LOCK:
+        _GAIA[key] = out
+        while len(_GAIA) > 8:
+            _GAIA.popitem(last=False)
+    return out
+
+
+def spectrum_and_lightcurve(cutouts, positions_by_epoch=None, ra=None, dec=None,
+                            neighbors_by_epoch=None, method: str = "aperture") -> dict:
     """Photometry at a fixed (ra, dec) or at a moving target position per epoch."""
     pts = []
     for c in cutouts:
@@ -76,7 +99,12 @@ def spectrum_and_lightcurve(cutouts, positions_by_epoch=None, ra=None, dec=None)
             r, d = positions_by_epoch[c.rec.epoch]
         else:
             r, d = ra, dec
-        ph = sx.photometry_at(c, r, d)
+        nb = None
+        if neighbors_by_epoch and neighbors_by_epoch.get(c.rec.epoch):
+            arr = np.asarray(neighbors_by_epoch[c.rec.epoch], dtype=float)
+            sep = np.hypot((arr[:, 0] - r) * np.cos(np.radians(d)), arr[:, 1] - d) * 3600
+            nb = arr[(sep > 6.0) & (sep < 36.0)]
+        ph = sx.photometry_at(c, r, d, neighbors=nb, method=method)
         if ph is not None:
             pts.append(ph)
     pts.sort(key=lambda q: (q["wavelength_um"] or 0))
@@ -150,8 +178,10 @@ def run_frames_job(p: dict, progress) -> dict:
     track = target_track(p, [e["mjd"] for e in ep_meta])
     pos_by_epoch = {e["epoch"]: t for e, t in zip(ep_meta, track)}
 
-    progress("process", 1, 1, "Measuring the spectrum and light curve...")
-    phot = spectrum_and_lightcurve(cutouts, positions_by_epoch=pos_by_epoch)
+    progress("process", 1, 1, "Measuring the spectrum and light curve (PSF fit, Gaia-deblended)...")
+    nbrs = gaia_neighbors(key, ra_mid, dec_mid, p["fov_arcmin"], ep_meta)
+    phot = spectrum_and_lightcurve(cutouts, positions_by_epoch=pos_by_epoch,
+                                   neighbors_by_epoch=nbrs, method="psf")
 
     result = {
         "key": key, "name": p.get("name"), "target": {k: p.get(k) for k in ("ra", "dec", "pmra", "pmdec", "ref_epoch")},

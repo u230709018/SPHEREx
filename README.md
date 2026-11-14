@@ -15,7 +15,10 @@ A public web tool for the NASA Space Apps Challenge 2026 *"Planet X and SPHEREx"
 - **Difference mode**: each visit minus the median of the other visits. Static stars cancel; movers leave a dipole.
 - **False-colour mode** (blue = D1+D2, green = D3+D4, red = D5+D6) and **D6−D4 mode**: cold brown dwarfs are bright at 4.5 µm but dark in the 3.3 µm methane band.
 - **Proper-motion aware**: named targets are propagated to the SPHEREx epochs. High-proper-motion stars (Barnard's Star moved 4.4′ since J2000; WISE 0855 sits ~2′ from its catalogue position) are found automatically, and the predicted track is drawn on the images.
-- **On-the-fly spectrum and light curve** at the target or at any clicked position, coloured by visit, with molecular bands (H₂O, CH₄, CO₂, CO) and emission lines marked.
+- **On-the-fly spectrum and light curve** at the target or at any clicked position, coloured by visit, with molecular bands (H₂O, CH₄, CO₂, CO) and emission lines marked. Fluxes come from forced photometry with the SPHEREx effective PSF, fitted simultaneously with neighbouring Gaia DR3 stars so blended light is removed (WISE 0855 sits 8″ from a G = 16 star: after deblending its spectrum is dark below 3.8 µm and matches the published WISE W2 and Spitzer 3.6 µm fluxes).
+- **Automatic candidate boxes** on the difference images: *mover?* (positive/negative dipole), *variable?*, and *one visit only* (asteroid, transient or artifact). Hints for human eyes, with cosmic-ray, bright-star and saturation safeguards.
+- **Measured proper motion**: per-visit centroids are fitted to measure the target's motion directly from SPHEREx and compare it with the catalogue value.
+- **Solar System object mode** (IRSA MOST): follow an asteroid or comet through every SPHEREx image, with object-centred frames and a shift-and-add *Stack* mode. Demo: interstellar comet 3I/ATLAS.
 - **Overlays**: Gaia DR3 (propagated to each visit from J2016.0, fast movers drawn with motion arrows), known asteroids and comets (JPL Small-Body Identification), target track.
 - **"No Gaia counterpart" badge**: a moving source invisible to Gaia is too cold for optical light – the classic brown-dwarf signature used by citizen scientists.
 - **Data-quality notes** from SPHEREx pixel flags (ghosts, streaks, cosmic rays, persistence) at the measured position; frames with heavy transient contamination are skipped.
@@ -54,7 +57,7 @@ Browser (vanilla JS, canvas, Plotly)          FastAPI backend (Python)
 - Cleaning: zodiacal light model (ZODI extension) subtracted; pixels with bad FLAGS bits masked (Explanatory Supplement Table 16); per-image background removed.
 - Alignment: every cutout reprojected onto a common north-up TAN grid (6.15″ pixels) with `reproject`.
 - Co-addition: one inverse-variance–weighted frame per (visit, detector); the browser normalises and combines detectors on the fly.
-- Spectrum: each SPHEREx pixel has its own wavelength (linear variable filter); per-image aperture photometry (r = 2 px, local annulus background) at the target position for that image's date gives one spectral point per image.
+- Spectrum: each SPHEREx pixel has its own wavelength (linear variable filter); per-image forced PSF photometry (ePSF extension of each image, weighted by the variance map, fitted together with Gaia DR3 neighbours and a local background) at the target position for that image's date gives one spectral point per image. Saturated stars are measured on their unsaturated PSF wings (relative fluxes only).
 
 ## Data and resources
 

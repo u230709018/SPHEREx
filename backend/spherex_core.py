@@ -35,6 +35,7 @@ from astropy.time import Time
 from astropy.wcs import WCS, FITSFixedWarning
 from astroquery.ipac.irsa import Irsa
 from reproject import reproject_interp
+from scipy.ndimage import map_coordinates
 
 warnings.simplefilter("ignore", FITSFixedWarning)
 logging.getLogger("astropy").setLevel(logging.ERROR)
@@ -90,7 +91,22 @@ class Cutout:
     hdul_header: fits.Header     # IMAGE header (for spectral WCS)
     wave_table: object = None    # WCS-WAVE HDU (for spectral WCS)
     n_transient: int = 0
+    epsf: np.ndarray | None = None   # effective PSF of the detector zone under this cutout (oversampled)
+    epsf_ovs: int = 5
     _spec_wcs: WCS | None = field(default=None, repr=False)
+
+    def psf_image(self, x0: float, y0: float) -> np.ndarray | None:
+        """Unit-flux image of a point source at pixel (x0, y0), from the SPHEREx ePSF.
+        The ePSF is pixel-convolved, so sampling it at (pixel centre - source) gives pixel values."""
+        if self.epsf is None:
+            return None
+        ny, nx = self.image.shape
+        yy, xx = np.mgrid[0:ny, 0:nx]
+        cen = (self.epsf.shape[0] - 1) / 2
+        img = map_coordinates(self.epsf, [cen + self.epsf_ovs * (yy - y0), cen + self.epsf_ovs * (xx - x0)],
+                              order=1, mode="constant", cval=0.0)
+        s = img.sum()
+        return img / s if s > 0 else None
 
     def wavelength_at(self, x: float, y: float) -> float | None:
         try:
@@ -222,6 +238,17 @@ def load_cutout(rec: ImageRecord, path: Path) -> Cutout | None:
             fhdr = hdul["FLAGS"].header if "FLAGS" in names else fits.Header()
             bits = {str(fhdr[k]): int(k[4:]) for k in fhdr["MSKN*"]} if "FLAGS" in names else {}
             wave = hdul["WCS-WAVE"].copy() if "WCS-WAVE" in names else None
+            epsf, ovs = None, 5
+            if "EPSF" in names:
+                try:   # pick the ePSF zone under the cutout centre (parent-image pixel coordinates)
+                    tab = hdul["EPSF"].data
+                    ovs = int(hdul["EPSF"].header.get("OVSMPX", 5))
+                    x0 = 1 + (image.shape[1] - 1) / 2 - float(hdr.get("CRPIX1A", 0))
+                    y0 = 1 + (image.shape[0] - 1) / 2 - float(hdr.get("CRPIX2A", 0))
+                    k = int(np.argmin((tab["XCENTER"] - x0) ** 2 + (tab["YCENTER"] - y0) ** 2))
+                    epsf = np.array(tab["EPSF"][k], dtype=np.float32)
+                except Exception:
+                    epsf = None
     except Exception:
         return None
     def mask_of(names):
@@ -233,7 +260,7 @@ def load_cutout(rec: ImageRecord, path: Path) -> Cutout | None:
     display = image.copy()
     display[((flags & mask_of(DISPLAY_BAD_FLAGS)) != 0) | ~np.isfinite(display)] = np.nan
     image[((flags & mask_of(BAD_FLAGS)) != 0) | ~np.isfinite(image)] = np.nan
-    return Cutout(rec, image, display, var, flags, bits, WCS(hdr), hdr, wave, n_tr)
+    return Cutout(rec, image, display, var, flags, bits, WCS(hdr), hdr, wave, n_tr, epsf, ovs)
 
 
 # --------------------------------------------------------------------------- #
@@ -282,8 +309,44 @@ def build_frames(cutouts: list[Cutout], grid: WCS, shape) -> dict:
 # --------------------------------------------------------------------------- #
 # 7. Photometry
 # --------------------------------------------------------------------------- #
+def _psf_fit(c: Cutout, x: float, y: float, rr: np.ndarray, neighbors) -> tuple[float, float, int] | None:
+    """Forced PSF photometry: fit the flux of a point source at (x, y) together with the fluxes of
+    known neighbours (e.g. Gaia stars) and a constant background, weighted by the variance map.
+    Returns (flux, error, n_neighbours) in image units summed over the PSF, or None."""
+    p0 = c.psf_image(x, y)
+    if p0 is None:
+        return None
+    cols = [p0]
+    if neighbors is not None and len(neighbors):
+        nb = np.asarray(neighbors, dtype=float)
+        nx_, ny_ = c.wcs.world_to_pixel(SkyCoord(nb[:, 0], nb[:, 1], unit="deg"))
+        d = np.hypot(np.atleast_1d(nx_) - x, np.atleast_1d(ny_) - y)
+        for k in np.argsort(d):
+            if 1.0 <= d[k] <= 5.5 and len(cols) < 7:   # closer than 1 px cannot be separated
+                pk = c.psf_image(float(np.atleast_1d(nx_)[k]), float(np.atleast_1d(ny_)[k]))
+                if pk is not None:
+                    cols.append(pk)
+    fit = (rr <= 3.0) & np.isfinite(c.image)
+    if fit.sum() < len(cols) + 7:
+        return None
+    A = np.stack([p[fit] for p in cols] + [np.ones(int(fit.sum()))], axis=1)
+    var = c.variance[fit]
+    med = np.nanmedian(var) if np.isfinite(var).any() else 1.0
+    w = 1.0 / np.where(np.isfinite(var) & (var > 0), var, med if med > 0 else 1.0)
+    try:
+        sol, *_ = np.linalg.lstsq(A * np.sqrt(w)[:, None], c.image[fit] * np.sqrt(w), rcond=None)
+        cov = np.linalg.inv(A.T @ (A * w[:, None]))
+    except np.linalg.LinAlgError:
+        return None
+    return float(sol[0]), float(np.sqrt(max(cov[0, 0], 0.0))), len(cols) - 1
+
+
 def photometry_at(c: Cutout, ra: float, dec: float, r_ap: float = 2.0,
-                  r_in: float = 4.0, r_out: float = 8.0) -> dict | None:
+                  r_in: float = 4.0, r_out: float = 8.0, neighbors=None,
+                  method: str = "aperture") -> dict | None:
+    """Flux of a source at (ra, dec) in one image. method="psf": forced ePSF photometry deblended
+    from `neighbors` [(ra, dec), ...]; "aperture": r=2 px aperture with annulus background.
+    Saturated stars always use the unsaturated PSF wings (relative fluxes only)."""
     x, y = c.wcs.world_to_pixel(SkyCoord(ra, dec, unit="deg"))
     x, y = float(x), float(y)
     ny, nx = c.image.shape
@@ -313,7 +376,12 @@ def photometry_at(c: Cutout, ra: float, dec: float, r_ap: float = 2.0,
     for yy_, xx_ in zip(*np.nonzero(core)):
         core_flags.update(c.flag_names_at(yi=int(yy_), xi=int(xx_)))
     saturated = bool(core_flags & SATURATION_FLAGS)
-    method = "aperture"
+    want_psf, method, n_blend = method == "psf", "aperture", 0
+    if want_psf and not saturated:
+        res = _psf_fit(c, x, y, rr, neighbors)
+        if res is not None:
+            flux, err, n_blend = res[0] * MJYSR_TO_MJY_PER_PIX, res[1] * MJYSR_TO_MJY_PER_PIX, res[2]
+            method = "psf"
     if saturated:
         # Wing photometry for saturated stars: the unsaturated PSF wings (1.5-5 px) scale with
         # the total flux, so this gives a reliable *relative* light curve (not an absolute flux).
@@ -328,4 +396,4 @@ def photometry_at(c: Cutout, ra: float, dec: float, r_ap: float = 2.0,
             "err_mjy": float(err) if err is not None else None,
             "mjd": c.rec.mjd, "epoch": c.rec.epoch, "det": c.rec.det, "obs_id": c.rec.obs_id,
             "flags": flags, "artifact": sorted(set(flags) & ARTIFACT_FLAGS),
-            "saturated": saturated, "method": method, "good": good}
+            "saturated": saturated, "method": method, "n_blend": n_blend, "good": good}

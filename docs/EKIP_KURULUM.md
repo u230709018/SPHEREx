@@ -65,6 +65,6 @@ Tarayıcıda **http://localhost:8000** adresini açın. Demo hedefleri (`data/re
 - [x] "Solar System object" modu (IRSA MOST) + Stack (shift-and-add) + CADC SSOIS linki. Demo: 3I/ATLAS
 - [x] SPHEREx'ten ölçülen öz hareket ve katalog karşılaştırması (WISE 0855: 7.7±0.5 vs 8.1″/yıl)
 - [x] Yayına alındı: **https://spherex-time-machine.onrender.com** (Render, ücretsiz). `main`'e her push otomatik deploy eder; 15 dk kullanılmazsa uyur, ilk açılış ~1 dk
-- [ ] PSF fotometrisi (WISE 0855'in kısa dalga boylarındaki kirlenme)
-- [ ] Otomatik hareketli aday işaretleme (fark karesinde 3σ + morfoloji)
+- [x] PSF fotometrisi + Gaia komşu ayrıştırma (WISE 0855: D1–D4 ≈ 0, D4 0.03 mJy ≈ Spitzer 3.6 µm, D5–D6 ≈ WISE W2)
+- [x] Otomatik aday kutuları (mover? / variable? / one visit only). Çok parlak doymuş hedeflerde kendiliğinden kapanır
 - [ ] Mobil görünüm kontrolü, demo videosu (≤30 sn), 7 slayt, proje sayfası metni (İngilizce)

@@ -98,6 +98,7 @@
         <label class="chk"><input id="ovGaia" type="checkbox"> Gaia DR3</label>
         <label class="chk"><input id="ovAst" type="checkbox"> Known asteroids</label>
         <label class="chk"><input id="ovBorder" type="checkbox" checked> Mark first epoch</label>
+        <label class="chk" title="Boxes mark automatic detections on the difference images: movers (dipoles), variables, and sources seen in one visit only"><input id="ovCand" type="checkbox" checked> Auto-detect candidates</label>
       </div>
     </div>
     <div class="links" id="links"></div>
@@ -126,7 +127,7 @@
         <button id="specReset" class="ghost small" hidden>Back to target</button>
       </div>
       <div id="specPlot" class="plot"></div>
-      <p class="muted small">Click anywhere on the image to measure the spectrum there. Colours = visit date; hollow grey = flagged pixels. Quick-look aperture photometry; for research-grade spectra use the <a href="https://irsa.ipac.caltech.edu/applications/spherex/" target="_blank" rel="noopener">IRSA Spectrophotometry Tool</a>.</p>
+      <p class="muted small">Click anywhere on the image to measure the spectrum there. Colours = visit date; hollow grey = flagged pixels. Quick-look forced photometry with the SPHEREx PSF, deblended from Gaia DR3 neighbours; for research-grade spectra use the <a href="https://irsa.ipac.caltech.edu/applications/spherex/" target="_blank" rel="noopener">IRSA Spectrophotometry Tool</a>.</p>
     </section>
     <section class="card">
       <h3>Light curve</h3>
@@ -142,6 +143,7 @@
       <ul class="small tips">
         <li><b>Blink:</b> stars stay put; a dot that hops between epochs is moving.</li>
         <li><b>Difference:</b> static stars vanish; a mover leaves a <i>dipole</i> (dark/bright pair).</li>
+        <li><b>Boxes:</b> automatic detections – pink <i>mover?</i> (dipole), blue <i>variable?</i>, yellow <i>one visit only</i> (asteroid, transient or artifact: check the asteroid overlay). They are hints, not discoveries – always look yourself.</li>
         <li><b>D6−D4:</b> cold brown dwarfs are bright at 4.5 µm but dark in the 3.3 µm methane band.</li>
         <li><b>No Gaia match?</b> A moving source invisible to Gaia is too cold for optical light – exactly how volunteers find brown dwarfs.</li>
         <li><b>Beware artifacts:</b> ghosts and cosmic rays appear in one frame only, or move with the detector instead of the sky.</li>

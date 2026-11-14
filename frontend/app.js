@@ -149,8 +149,74 @@ function rebuildDisplay() {
       });
     } else S.display = base.map((a) => [a]);
   }
+  findCandidates();
   computeLimits();
   render();
+}
+/* Automatic candidate detection on the difference images (visit minus median of the others):
+   - "mover?"    a positive peak with a negative trough next to it in the same visit (dipole)
+   - "variable?" a persistent source whose brightness changed
+   - "single"    something present in one visit only (asteroid, transient, or an artifact)      */
+function findCandidates() {
+  S.cands = [];
+  if (!S.result || isMoving() || S.epochs.length < 2) return;
+  const [ny, nx] = S.result.grid.shape, dets = [...S.dets];
+  const base = S.epochs.map((e) => composite(e.epoch, dets));
+  if (base.filter(Boolean).length < 2) return;
+  const diffs = base.map((a, k) => {
+    if (!a) return null;
+    const m = medianOthers(base, k), o = new Float32Array(a.length), fin = [];
+    for (let i = 0; i < a.length; i++) { o[i] = a[i] - m[i]; if (Number.isFinite(o[i])) fin.push(Math.abs(o[i])); }
+    fin.sort((p, q) => p - q);
+    return { o, m, sig: 1.4826 * percentile(fin, 50) || 1 };
+  });
+  // Around a saturated target the residuals are dominated by its changing wings: do not search there.
+  const pts = S.result.points || [], satTarget = pts.length && pts.filter((p) => p.saturated).length / pts.length > 0.3;
+  const tpix = S.epochs.map((e) => world2pix(e.target_ra, e.target_dec));
+  const satFlux = pts.filter((p) => p.saturated).map((p) => p.flux_mjy).sort((a, b) => a - b);
+  S.candOff = Boolean(satTarget && satFlux.length && satFlux[satFlux.length >> 1] > 3000);   // > ~3 Jy: halo fills the field
+  if (S.candOff) { S.cands = S.epochs.map(() => []); return; }
+  const nImg = new Map(S.result.frames.map((f) => [`${f.epoch}|${f.det}`, f.n]));
+  S.cands = diffs.map((d, k) => {
+    if (!d) return [];
+    // Visits built from fewer than 3 images per detector have no cosmic-ray rejection: skip them.
+    const ns = dets.map((dt) => nImg.get(`${S.epochs[k].epoch}|${dt}`)).filter((n) => n != null);
+    if (!ns.length || Math.min(...ns) < 3) return [];
+    const { o, m, sig } = d, found = [];
+    for (let y = 3; y < ny - 3; y++) for (let x = 3; x < nx - 3; x++) {
+      const i = y * nx + x, v = o[i];
+      if (!(v > 5 * sig)) continue;
+      let isMax = true, second = -Infinity, bad = false, mMax = Math.abs(m[i]);
+      for (let dy = -2; dy <= 2 && isMax; dy++) for (let dx = -2; dx <= 2; dx++) {
+        if (!dx && !dy) continue;
+        const u = o[(y + dy) * nx + x + dx];
+        if (!Number.isFinite(u)) { if (Math.abs(dx) < 2 && Math.abs(dy) < 2) bad = true; continue; }
+        if (u > v) { isMax = false; break; }
+        if (Math.abs(dx) < 2 && Math.abs(dy) < 2) { second = Math.max(second, u); mMax = Math.max(mMax, Math.abs(m[(y + dy) * nx + x + dx])); }
+      }
+      // reject single-pixel spikes (cosmic rays) and small residuals of bright static stars
+      if (!isMax || bad || second < 2 * sig || v < 0.3 * mMax) continue;
+      if (satTarget && Math.hypot(x - tpix[k][0], y - tpix[k][1]) < 10) continue;
+      let wide = 0;   // wings of a much brighter star nearby?
+      for (let dy = -4; dy <= 4; dy++) for (let dx = -4; dx <= 4; dx++) {
+        const u = m[(y + dy) * nx + x + dx];
+        if (Number.isFinite(u) && u > wide) wide = u;
+      }
+      if (v < 0.08 * wide) continue;
+      if (satTarget && wide > 15) continue;   // inside the halo of the saturated target: only trust faint-sky detections
+      let trough = 0, tDist = 0;
+      for (let dy = -3; dy <= 3; dy++) for (let dx = -3; dx <= 3; dx++) {
+        const u = o[(y + dy) * nx + x + dx], r = Math.hypot(dx, dy);
+        if (r >= 1 && r <= 3.2 && Number.isFinite(u) && u < trough) { trough = u; tDist = r; }
+      }
+      let kind = "single";
+      if (trough < -4 * sig && -trough > 0.35 * v) kind = "mover";
+      else if (mMax > 6) kind = "variable";
+      else if (diffs.some((e, j) => j !== k && e && Math.abs(e.o[i]) > 4 * e.sig)) kind = "variable";
+      found.push({ x, y, v: v / sig, kind });
+    }
+    return found.sort((a, b) => b.v - a.v).slice(0, 8);
+  });
 }
 function computeLimits() {
   const lo = +$("lo").value, hi = +$("hi").value, sym = S.mode === "diff" || S.mode === "cdiff";
@@ -249,6 +315,16 @@ function drawOverlay() {
       ctx.beginPath(); ctx.arc(c, c, r, 0, 2 * Math.PI); ctx.stroke();
     }
     return;
+  }
+  if ($("ovCand").checked && (S.mode === "blink" || S.mode === "diff") && S.cands && S.cands[S.cur]) {
+    const style = { mover: ["#ff6bd6", "mover?"], variable: ["#5ad1ff", "variable?"], single: ["#ffd25a", "one visit only"] };
+    ctx.font = "11px system-ui"; ctx.lineWidth = 1.5;
+    for (const c of S.cands[S.cur]) {
+      const [x, y] = toCanvas(c.x, c.y), r = Math.max(8, px * 1.8), [col, label] = style[c.kind];
+      ctx.strokeStyle = col; ctx.fillStyle = col;
+      ctx.strokeRect(x - r, y - r, 2 * r, 2 * r);
+      ctx.fillText(`${label} ${c.v.toFixed(0)}σ`, x - r, y - r - 3);
+    }
   }
   if ($("ovGaia").checked && S.gaia) {
     for (const s of S.gaia.sources) {
@@ -438,6 +514,12 @@ function buildWarnings() {
       (wings ? `Fluxes are measured on the unsaturated PSF wings, so the <b>light curve is reliable in relative terms</b> (compare within one detector); the spectrum shape is only approximate.`
              : `Its motion is still visible, but its spectrum and light curve are not reliable.`));
     $("badges").insertAdjacentHTML("beforeend", `<span class="badge warn">Saturated in SPHEREx</span>`);
+  }
+  if (S.candOff) items.push("Automatic candidate detection is switched off for this field: the halo of the very bright, saturated target covers the whole image.");
+  const blended = pts.filter((p) => p.n_blend > 0);
+  if (blended.length) {
+    const n = Math.max(...blended.map((p) => p.n_blend));
+    items.push(`<b>Deblended:</b> ${n} Gaia star${n > 1 ? "s" : ""} within 35″ ${n > 1 ? "were" : "was"} fitted together with the target (SPHEREx PSF model), so ${n > 1 ? "their" : "its"} light is not counted in the spectrum.`);
   }
   const art = {};
   pts.forEach((p) => p.artifact.forEach((a) => (art[a] = (art[a] || 0) + 1)));
@@ -686,10 +768,9 @@ function plotSpectrum() {
 }
 function plotLightcurve() {
   if (!window.Plotly || !S.spec) return;
-  const lc = S.spec.lightcurve, traces = [];
-  DETS.forEach((d) => {
+  const lc = S.spec.lightcurve, traces = [], used = lcDetectors();
+  used.forEach((d) => {
     const g = lc.filter((r) => r.det === d);
-    if (g.length < 2) return;
     const med = [...g.map((r) => r.flux_mjy)].sort((a, b) => a - b)[g.length >> 1] || 1;
     const norm = Math.abs(med) > 1e-6 ? med : 1;
     traces.push({ x: g.map((r) => mjdToDate(r.mjd)), y: g.map((r) => r.flux_mjy / norm), mode: "lines+markers", type: "scatter", name: d,
@@ -697,12 +778,27 @@ function plotLightcurve() {
       error_y: { type: "data", array: g.map((r) => (r.err_mjy || 0) / Math.abs(norm)), visible: true, thickness: 1, width: 0 },
       hovertemplate: `${d}: %{y:.2f}× median<br>%{x}<extra></extra>` });
   });
+  const skipped = DETS.filter((d) => lc.some((r) => r.det === d) && !used.includes(d));
   Plotly.react("lcPlot", traces, { ...PLOT_LAYOUT, xaxis: { ...PLOT_LAYOUT.xaxis, type: "date" },
-    yaxis: { ...PLOT_LAYOUT.yaxis, title: "Flux / median", type: lcLog() ? "log" : "linear" } }, { displayModeBar: false, responsive: true });
+    yaxis: { ...PLOT_LAYOUT.yaxis, title: "Flux / median", type: lcLog() ? "log" : "linear" },
+    annotations: skipped.length ? [{ xref: "paper", yref: "paper", x: 1, y: 1.02, xanchor: "right", yanchor: "bottom", showarrow: false,
+      text: `not detected in ${skipped.join(", ")}`, font: { size: 10, color: "#8e9bb3" } }] : [] }, { displayModeBar: false, responsive: true });
+}
+function lcDetectors() {   // detectors where the source is actually detected (median flux > 3x its uncertainty)
+  const lc = S.spec?.lightcurve || [];
+  return DETS.filter((d) => {
+    const g = lc.filter((r) => r.det === d);
+    if (g.length < 2) return false;
+    const f = g.map((r) => r.flux_mjy).sort((a, b) => a - b), med = f[f.length >> 1];
+    const errs = g.map((r) => r.err_mjy).filter((e) => e > 0).sort((a, b) => a - b);
+    const mad = 1.4826 * f.map((v) => Math.abs(v - med)).sort((a, b) => a - b)[f.length >> 1] / Math.sqrt(f.length);
+    const e = Math.max(errs.length ? errs[errs.length >> 1] / Math.sqrt(g.length) : 0, 0);
+    return med > 0 && med > 3 * Math.max(e, Math.min(mad, med / 3.01));
+  });
 }
 function lcLog() {   // large-amplitude variables (e.g. Miras) read better on a log axis
-  const lc = S.spec?.lightcurve || [];
-  return DETS.some((d) => {
+  const lc = S.spec?.lightcurve || [], used = lcDetectors();
+  return used.some((d) => {
     const f = lc.filter((r) => r.det === d && r.flux_mjy > 0).map((r) => r.flux_mjy);
     return f.length > 2 && Math.max(...f) / Math.min(...f) > 4;
   });
@@ -790,7 +886,7 @@ async function main() {
   ["asinh", "invert"].forEach((id) => ($(id).oninput = () => { render(); setHash(); }));
   $("zoom").oninput = () => { render(); setHash(); };
   $("speed").oninput = () => setHash();
-  ["ovTarget", "ovGaia", "ovBorder"].forEach((id) => ($(id).onchange = drawOverlay));
+  ["ovTarget", "ovGaia", "ovBorder", "ovCand"].forEach((id) => ($(id).onchange = drawOverlay));
   $("survey").onchange = async () => {
     const al = await ensureAladin();
     if (!al) return;
