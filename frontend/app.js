@@ -171,6 +171,7 @@ function rebuildDisplay() {
 function findCandidates() {
   S.cands = [];
   if (!S.result || isMoving() || S.epochs.length < 2) return;
+  if (S.result.partial === "preview") return;   // single images: cosmic rays are not rejected yet
   const [ny, nx] = S.result.grid.shape, dets = [...S.dets];
   const base = S.epochs.map((e) => (e.archival ? null : composite(e.epoch, dets)));   // SPHEREx visits only
   if (base.filter(Boolean).length < 2) return;
@@ -474,8 +475,8 @@ function liveStatus(text) {
   if (text) $("liveStatusText").textContent = text;
 }
 function liveText(j) {
-  const r = S.result, got = r && r.partial ? `${r.epochs.length} of ${r.visits_total} visits on screen` : "";
-  return `${got}${got ? " · " : ""}${j.stage === "download" ? `loading images ${j.done}/${j.total}` : "measuring the spectrum"}…`;
+  const r = S.result, what = r && r.partial === "preview" ? "Quick look (1 image per visit) · sharpening" : "Loading the other detectors";
+  return j.stage === "download" ? `${what}: ${j.done}/${j.total} images…` : "Measuring the spectrum…";
 }
 function onResult(res, opt = {}) {
   // Updates of the same field (partial -> more visits -> final) keep the frame being shown and the player state.
@@ -689,7 +690,7 @@ async function fetchAsteroids() {
 // detector, extended sources): 0.12 px = 0.74". Keeps galaxy nuclei (e.g. Centaurus A) from "moving".
 const CENTROID_FLOOR_PX = 0.12;
 function measureMotion() {
-  if (!S.result || isMoving() || S.epochs.length < 3) return null;
+  if (!S.result || isMoving() || S.epochs.length < 3 || S.result.partial === "preview") return null;
   const [ny, nx] = S.result.grid.shape, pix = Math.abs(S.result.grid.cdelt[0]) * 3600;
   const dets = S.dets.size ? [...S.dets] : DETS;
   const pts = [];

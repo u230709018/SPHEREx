@@ -124,7 +124,7 @@ def spectrum_and_lightcurve(cutouts, positions_by_epoch=None, ra=None, dec=None,
     return {"points": pts, "lightcurve": lc}
 
 
-PREVIEW_PER_CELL = 3                         # images per (visit, detector) in the first preview
+PREVIEW_PER_CELL = 1                         # images per (visit, detector) in the first preview
 KEY_EXCLUDE = ("name", "priority_dets")      # request fields that do not change the final result
 
 
@@ -147,8 +147,8 @@ def run_frames_job(p: dict, progress, publish=None) -> dict:
     """p: ra, dec, pmra, pmdec, ref_epoch, fov_arcmin, max_per_cell, budget, name, priority_dets.
 
     Work is done in three groups so the browser can start blinking early (publish(partial)):
-      1. "preview": the detectors on screen (priority_dets), first and last visit only
-      2. "visits":  the same detectors, every other visit
+      1. "preview": the detectors on screen (priority_dets), one image of every visit
+      2. "sharper": the remaining images of those detectors
       3. final:     the remaining detectors, then the spectrum and light curve
     Each (visit, detector) frame belongs to exactly one group, so frames are built once."""
     t0 = time.time()
@@ -173,11 +173,10 @@ def run_frames_job(p: dict, progress, publish=None) -> dict:
     # first and last visit that the on-screen detectors actually cover (a field near the edge of the
     # focal plane can be seen by only some detectors in a visit)
     ep_prio = sorted({r.epoch for r in chosen if r.det in prio}) or ep_ids
-    ends = {ep_prio[0], ep_prio[-1]}
-    # Preview: at most PREVIEW_PER_CELL images (spread in time) of each on-screen detector in the
-    # first and last visit; the rest of those cells is added in the "visits" stage.
+    # Preview: PREVIEW_PER_CELL image(s) of each on-screen detector in EVERY visit, so the whole
+    # animation starts at once (noisier); the rest of the images sharpen those frames in stage 2.
     preview = []
-    for ep in sorted(ends):
+    for ep in ep_prio:
         for det in prio:
             cell = [r for r in chosen if r.epoch == ep and r.det == det]
             idx = sorted(set(np.linspace(0, len(cell) - 1, min(PREVIEW_PER_CELL, len(cell))).round().astype(int))) if cell else []
@@ -185,7 +184,7 @@ def run_frames_job(p: dict, progress, publish=None) -> dict:
     in_preview = {id(r) for r in preview}
     groups = [g for g in (
         ("preview", preview),
-        ("visits", [r for r in chosen if r.det in prio and id(r) not in in_preview]),
+        ("sharper", [r for r in chosen if r.det in prio and id(r) not in in_preview]),
         ("final", [r for r in chosen if r.det not in prio])) if g[1]]
 
     def assemble(cutouts, frames, phot=None, partial=None):
