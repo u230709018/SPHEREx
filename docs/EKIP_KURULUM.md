@@ -64,7 +64,7 @@ Tarayıcıda **http://localhost:8000** adresini açın. Demo hedefleri (`data/re
 - [x] Aladin Lite bağlam paneli (IRSA HiPS) + 1950→2030 hareket izi
 - [x] "Solar System object" modu (IRSA MOST) + Stack (shift-and-add) + CADC SSOIS linki. Demo: 3I/ATLAS
 - [x] SPHEREx'ten ölçülen öz hareket ve katalog karşılaştırması (WISE 0855: 7.7±0.5 vs 8.1″/yıl)
-- [ ] Yayına alma (Render / Railway / Hugging Face Spaces). `data/results` repo'da olduğu için demo anında açılır
+- [x] Yayına alındı: **https://spherex-time-machine.onrender.com** (Render, ücretsiz). `main`'e her push otomatik deploy eder; 15 dk kullanılmazsa uyur, ilk açılış ~1 dk
 - [ ] PSF fotometrisi (WISE 0855'in kısa dalga boylarındaki kirlenme)
 - [ ] Otomatik hareketli aday işaretleme (fark karesinde 3σ + morfoloji)
 - [ ] Mobil görünüm kontrolü, demo videosu (≤30 sn), 7 slayt, proje sayfası metni (İngilizce)

@@ -2,6 +2,10 @@
 
 **Blink the infrared sky. Spot what moves. Read its spectrum.**
 
+**Live tool: https://spherex-time-machine.onrender.com** (free hosting: the first visit after a quiet period can take ~1 minute to wake up).
+
+Try: [WISE 0855 difference](https://spherex-time-machine.onrender.com/#target=wise0855&mode=diff&dets=D5,D6) · [Barnard's Star](https://spherex-time-machine.onrender.com/#target=barnard&dets=D2,D3) · [R Draconis light curve](https://spherex-time-machine.onrender.com/#target=r_dra) · [Interstellar comet 3I/ATLAS](https://spherex-time-machine.onrender.com/#object=3I&fov=4&mode=stack)
+
 A public web tool for the NASA Space Apps Challenge 2026 *"Planet X and SPHEREx"*. Enter a sky position or an object name, and the tool shows a series of NASA SPHEREx images of that patch of sky like a short movie, making moving and variable objects easy to see. Click anywhere to get an on-the-fly 0.75–5 µm spectrum.
 
 ## Features
