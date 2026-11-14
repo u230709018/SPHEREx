@@ -170,7 +170,10 @@ def run_frames_job(p: dict, progress, publish=None) -> dict:
 
     prio = [d for d in (p.get("priority_dets") or []) if d in sx.DETECTORS] or ["D5", "D6"]
     ep_ids = sorted({r.epoch for r in chosen})
-    ends = {ep_ids[0], ep_ids[-1]}
+    # first and last visit that the on-screen detectors actually cover (a field near the edge of the
+    # focal plane can be seen by only some detectors in a visit)
+    ep_prio = sorted({r.epoch for r in chosen if r.det in prio}) or ep_ids
+    ends = {ep_prio[0], ep_prio[-1]}
     # Preview: at most PREVIEW_PER_CELL images (spread in time) of each on-screen detector in the
     # first and last visit; the rest of those cells is added in the "visits" stage.
     preview = []
