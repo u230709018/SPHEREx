@@ -25,7 +25,11 @@ _LRU_LOCK = threading.Lock()
 PIPELINE_VERSION = 6
 
 
+OPTIONAL_KEYS = ("date_start", "date_end")   # left out of the key when not set (keeps old cache keys)
+
+
 def job_key(p: dict) -> str:
+    p = {k: v for k, v in p.items() if not (k in OPTIONAL_KEYS and v is None)}
     sig = json.dumps({k: (round(v, 5) if isinstance(v, float) else v) for k, v in sorted(p.items())}
                      | {"v": PIPELINE_VERSION})
     return hashlib.sha1(sig.encode()).hexdigest()[:16]
@@ -182,6 +186,17 @@ def run_frames_job(p: dict, progress, publish=None) -> dict:
     records = sx.find_images(ra_mid, dec_mid)
     if not records:
         raise RuntimeError("No SPHEREx images cover this position yet.")
+    d0, d1 = p.get("date_start"), p.get("date_end")
+    if d0 or d1:                                  # user-chosen date range (inclusive, UTC days)
+        m0 = Time(d0).mjd if d0 else -1e9
+        m1 = Time(d1).mjd + 1 if d1 else 1e9
+        inside = [r for r in records if m0 <= r.mjd < m1]
+        if not inside:
+            visits = sx.group_epochs(list(records))
+            dates = ", ".join(Time(min(r.mjd for r in v), format="mjd").iso[:10] for v in visits)
+            raise RuntimeError(f"No SPHEREx visits between {d0 or 'the start'} and {d1 or 'today'}. "
+                               f"This position was observed on: {dates}.")
+        records = inside
     epochs = sx.group_epochs(records)
     n_total = len(records)
     chosen = sx.budget_select(records, p.get("max_per_cell", 8), p.get("budget", 260))
@@ -215,6 +230,7 @@ def run_frames_job(p: dict, progress, publish=None) -> dict:
             "target": {k: p.get(k) for k in ("ra", "dec", "pmra", "pmdec", "ref_epoch")},
             "fov_arcmin": p["fov_arcmin"],
             "quality": {"max_per_cell": p.get("max_per_cell", 8), "budget": p.get("budget", 260)},
+            "date_range": [p.get("date_start"), p.get("date_end")] if (p.get("date_start") or p.get("date_end")) else None,
             "grid": {"crval": [ra_mid, dec_mid], "crpix": list(grid.wcs.crpix), "cdelt": list(grid.wcs.cdelt),
                      "shape": list(shape)},
             "epochs": [e | {"target_ra": t[0], "target_dec": t[1]} for e, t in zip(ep_meta, track)],

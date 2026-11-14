@@ -122,13 +122,38 @@ function medianOthers(arrs, skip) {
   }
   return out;
 }
+// ---------------------------------------------------------------- date range
+function dateRange() { return { from: $("dFrom").value || null, to: $("dTo").value || null }; }
+function inRange(e) {   // a visit (or archival epoch) overlapping the chosen dates
+  const r = dateRange();
+  return (!r.from || e.date_end >= r.from) && (!r.to || e.date_start <= r.to);
+}
+function rangeNote(text) { $("rangeNote").hidden = !text; $("rangeNote").textContent = text || ""; }
+function onRangeChange() {
+  setHash();
+  if (!S.result || isMoving()) return;
+  const dr = S.result.date_range, r = dateRange();
+  // the field was loaded for a narrower range: widen it by loading again
+  if (dr && ((dr[0] && (!r.from || r.from < dr[0])) || (dr[1] && (!r.to || r.to > dr[1])))) return loadTarget(S.target, S.fov);
+  rebuildDisplay(); plotSpectrum(); plotLightcurve(); showMotionBadge();
+}
 function useArchival() {
   return Boolean(S.arch && S.arch.epochs.length && $("ovArch").checked && (S.mode === "blink" || S.mode === "diff") && !isMoving());
 }
 function rebuildDisplay() {
   if (!S.result) return;
   const curId = S.epochs[S.cur]?.epoch;
-  S.epochs = useArchival() ? [...S.arch.epochs, ...S.sph] : S.sph;
+  const r = dateRange(), ranged = !isMoving() && (r.from || r.to);
+  let sph = ranged ? S.sph.filter(inRange) : S.sph;
+  let arch = useArchival() ? (ranged ? S.arch.epochs.filter(inRange) : S.arch.epochs) : [];
+  if (ranged && !sph.length && !arch.length) {
+    rangeNote(`No visits between ${r.from || "the start"} and ${r.to || "today"}. This field was observed on ${S.sph.map((e) => e.date_start).join(", ")}; showing all.`);
+    sph = S.sph; arch = useArchival() ? S.arch.epochs : [];
+  } else if (ranged) {
+    const one = sph.length + arch.length === 1 ? " Only one visit in this range, so nothing can change: widen the dates to compare visits." : " Clear the dates to see all.";
+    rangeNote(`Dates ${r.from || "…"} → ${r.to || "…"}: ${sph.length} of ${S.sph.length} SPHEREx visits${arch.length ? ` + ${arch.map((e) => e.label).join(" + ")}` : ""}.${one}`);
+  } else rangeNote(null);
+  S.epochs = [...arch, ...sph];
   S.cur = Math.max(0, S.epochs.findIndex((e) => e.epoch === curId));
   buildTimeline();
   const eps = S.epochs.map((e) => e.epoch);
@@ -407,7 +432,8 @@ async function loadTarget(t, fov, quality = FULL) {
   setHash();
   const body = { ra: t.ra, dec: t.dec, pmra: t.pmra || 0, pmdec: t.pmdec || 0, ref_epoch: t.ref_epoch || 2000,
                  fov_arcmin: fov, ...quality, name: t.name || null,
-                 priority_dets: S.dets.size && S.dets.size < 6 ? [...S.dets] : null };
+                 priority_dets: S.dets.size && S.dets.size < 6 ? [...S.dets] : null,
+                 date_start: dateRange().from, date_end: dateRange().to };
   runJob("/api/frames", body, "Could not load this field.");
 }
 async function loadObject(name, fov) {
@@ -419,6 +445,9 @@ async function loadObject(name, fov) {
   setHash();
   const body = { name, fov_arcmin: S.fov, max_frames: 40 };
   if (name === "3I") Object.assign(body, { start: "2025-08-01", end: "2025-12-31" });  // demo: SPHEREx's two 3I/ATLAS campaigns
+  const dr = dateRange();
+  if (dr.from) body.start = dr.from;
+  if (dr.to) body.end = dr.to;
   runJob("/api/moving", body, "Could not track this object.");
 }
 async function runJob(path, body, failMsg) {
@@ -862,7 +891,8 @@ const PLOT_LAYOUT = {
 const EPOCH_COLORS = ["#4fb3ff", "#ffb547", "#39d98a", "#ff6b6b", "#c58cff", "#5ef0e0", "#f0e05e", "#ff8fc7"];
 function plotSpectrum() {
   if (!window.Plotly || !S.spec) return;
-  const pts = S.spec.points.filter((p) => p.wavelength_um);
+  const vis = new Set(S.epochs.map((e) => e.epoch));
+  const pts = S.spec.points.filter((p) => p.wavelength_um && vis.has(p.epoch));
   const traces = [];
   if (S.epochs.length > 8) {   // many visits (e.g. moving objects): one trace, colour = date
     const g = pts.filter((p) => p.good);
@@ -900,7 +930,8 @@ function plotSpectrum() {
 }
 function plotLightcurve() {
   if (!window.Plotly || !S.spec) return;
-  const lc = S.spec.lightcurve, traces = [], used = lcDetectors();
+  const vis = new Set(S.epochs.map((e) => e.epoch));
+  const lc = S.spec.lightcurve.filter((r) => vis.has(r.epoch)), traces = [], used = lcDetectors(lc);
   used.forEach((d) => {
     const g = lc.filter((r) => r.det === d);
     const med = [...g.map((r) => r.flux_mjy)].sort((a, b) => a - b)[g.length >> 1] || 1;
@@ -911,15 +942,14 @@ function plotLightcurve() {
       hovertemplate: `${d}: %{y:.2f}× median<br>%{x}<extra></extra>` });
   });
   const skipped = DETS.filter((d) => lc.some((r) => r.det === d) && !used.includes(d));
-  const ep = S.sph && S.sph.length ? S.sph : S.epochs, pad = 12;
+  const ep = S.epochs.filter((e) => !e.archival), pad = 12;
   const xr = ep.length ? [mjdToDate(Math.min(...ep.map((e) => e.mjd)) - pad), mjdToDate(Math.max(...ep.map((e) => e.mjd)) + pad)] : undefined;
   Plotly.react("lcPlot", traces, { ...PLOT_LAYOUT, xaxis: { ...PLOT_LAYOUT.xaxis, type: "date", range: xr },
     yaxis: { ...PLOT_LAYOUT.yaxis, title: "Flux / median", type: lcLog() ? "log" : "linear" },
     annotations: skipped.length ? [{ xref: "paper", yref: "paper", x: 1, y: 1.02, xanchor: "right", yanchor: "bottom", showarrow: false,
       text: `not detected in ${skipped.join(", ")}`, font: { size: 10, color: "#8e9bb3" } }] : [] }, { displayModeBar: false, responsive: true });
 }
-function lcDetectors() {   // detectors where the source is actually detected (median flux > 3x its uncertainty)
-  const lc = S.spec?.lightcurve || [];
+function lcDetectors(lc = S.spec?.lightcurve || []) {   // detectors where the source is detected (median flux > 3x its uncertainty)
   return DETS.filter((d) => {
     const g = lc.filter((r) => r.det === d);
     if (g.length < 2) return false;
@@ -947,6 +977,7 @@ function setHash() {
   else if (t.id) h.set("target", t.id);
   else { h.set("ra", t.ra.toFixed(6)); h.set("dec", t.dec.toFixed(6)); if (t.pmra) h.set("pmra", t.pmra); if (t.pmdec) h.set("pmdec", t.pmdec); if (t.ref_epoch && t.ref_epoch !== 2000) h.set("epoch", t.ref_epoch); if (t.name) h.set("name", t.name); }
   h.set("fov", S.fov); h.set("mode", S.mode); h.set("dets", [...S.dets].join(","));
+  const dr = dateRange(); if (dr.from) h.set("from", dr.from); if (dr.to) h.set("to", dr.to);
   h.set("speed", $("speed").value); if (!$("invert").checked) h.set("invert", "0"); if (+$("zoom").value !== 1) h.set("zoom", $("zoom").value);
   history.replaceState(null, "", "#" + h.toString());
 }
@@ -981,6 +1012,8 @@ async function initFromHash(targets) {
   if (h.get("fov")) setFovOption(+h.get("fov"));
   if (h.get("mode")) S.mode = h.get("mode");
   if (h.get("dets")) S.dets = new Set(h.get("dets").split(",").filter((d) => DETS.includes(d)));
+  if (/^\d{4}-\d{2}-\d{2}$/.test(h.get("from") || "")) $("dFrom").value = h.get("from");
+  if (/^\d{4}-\d{2}-\d{2}$/.test(h.get("to") || "")) $("dTo").value = h.get("to");
   if (h.get("speed")) $("speed").value = h.get("speed");
   if (h.get("invert") === "0") $("invert").checked = false;
   if (h.get("zoom")) $("zoom").value = h.get("zoom");
@@ -1022,6 +1055,8 @@ async function main() {
   $("speed").oninput = () => setHash();
   ["ovTarget", "ovGaia", "ovBorder", "ovCand"].forEach((id) => ($(id).onchange = drawOverlay));
   $("ovArch").onchange = () => { rebuildDisplay(); showMotionBadge(); };
+  ["dFrom", "dTo"].forEach((id) => ($(id).onchange = onRangeChange));
+  $("dTo").max = new Date().toISOString().slice(0, 10);
   $("pickLoad").onclick = () => {
     if (!S.pick) return;
     $("qmode").value = "sky";

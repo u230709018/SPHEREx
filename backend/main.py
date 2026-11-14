@@ -53,6 +53,8 @@ class FramesRequest(BaseModel):
     budget: int = Field(260, ge=20, le=1200)
     name: str | None = None
     priority_dets: list[str] | None = Field(None, max_length=6)   # detectors on screen: processed first
+    date_start: str | None = Field(None, pattern=r"^\d{4}-\d{2}-\d{2}$")   # optional range of visits (UTC)
+    date_end: str | None = Field(None, pattern=r"^\d{4}-\d{2}-\d{2}$")
 
 
 class MovingRequest(BaseModel):
@@ -105,10 +107,13 @@ def frames(req: FramesRequest):
     params = req.model_dump()
     params_for_key = {k: v for k, v in params.items() if k not in pl.KEY_EXCLUDE}
     key = pl.job_key(params_for_key)
-    # A sharper (more images per visit) result of the same field is always good enough.
-    for mpc, bud in ((8, 260), (params["max_per_cell"], params["budget"])):
-        k = pl.job_key(params_for_key | {"max_per_cell": mpc, "budget": bud})
-        if max(mpc, params["max_per_cell"]) == mpc and pl.cached_result(k):
+    # A sharper (more images per visit) result of the same field is always good enough, and so is
+    # one covering all dates (the page filters visits by date itself).
+    variants = [params_for_key | {"max_per_cell": 8, "budget": 260, "date_start": None, "date_end": None},
+                params_for_key | {"max_per_cell": 8, "budget": 260}, params_for_key]
+    for v in variants:
+        k = pl.job_key(v)
+        if v["max_per_cell"] >= params["max_per_cell"] and pl.cached_result(k):
             return {"status": "done", "result_key": k}
     job_id = uuid.uuid4().hex[:12]
     with JOBS_LOCK:
