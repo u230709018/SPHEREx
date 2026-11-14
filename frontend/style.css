@@ -36,7 +36,9 @@ button.small, .small { font-size: 12.5px; }
 .logo { font-size: 30px; color: var(--accent-2); }
 h1 { font-size: 20px; margin: 0; letter-spacing: .2px; }
 .tagline { margin: 2px 0 0; color: var(--muted); font-size: 13px; }
-.search { display: flex; gap: 8px; }
+.search { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: flex-end; }
+.search input[type=text] { min-width: 220px; }
+.brand { min-width: 250px; }
 .search input[type=text] {
   flex: 1; min-width: 0; background: var(--panel); border: 1px solid var(--line);
   border-radius: 8px; padding: 8px 12px;
