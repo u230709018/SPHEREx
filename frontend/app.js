@@ -642,6 +642,9 @@ async function fetchAsteroids() {
 // ---------------------------------------------------------------- measured proper motion
 /* Centroid the target in every visit (near its predicted position) and fit a straight line in
    time. SPHEREx astrometry is good to <0.3", so even ~1-pixel motions over a year are measurable. */
+// Systematic centroid error per visit (co-adds of a few reprojected images, PSF changes across the
+// detector, extended sources): 0.12 px = 0.74". Keeps galaxy nuclei (e.g. Centaurus A) from "moving".
+const CENTROID_FLOOR_PX = 0.12;
 function measureMotion() {
   if (!S.result || isMoving() || S.epochs.length < 3) return null;
   const [ny, nx] = S.result.grid.shape, pix = Math.abs(S.result.grid.cdelt[0]) * 3600;
@@ -686,7 +689,7 @@ function measureMotion() {
   // grid x grows westward (cdelt1 < 0): +x = -RA direction
   const pmra = -fx.slope * pix, pmdec = fy.slope * pix;
   const err = Math.hypot(fx.err, fy.err) * pix / Math.SQRT2;
-  return { pmra, pmdec, total: Math.hypot(pmra, pmdec), err: Math.max(err, 0.3 / Math.max(0.1, pts.at(-1).t - pts[0].t)),
+  return { pmra, pmdec, total: Math.hypot(pmra, pmdec), err: Math.max(err, (CENTROID_FLOOR_PX * pix) / Math.max(0.1, pts.at(-1).t - pts[0].t)),
            n: pts.length, span: pts.at(-1).t - pts[0].t, arch: pts.filter((p) => p.arch).length };
 }
 function showMotionBadge() {
