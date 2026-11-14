@@ -20,6 +20,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 import catalogs as cat
+import moving as mv
 import pipeline as pl
 import spherex_core as sx
 
@@ -44,17 +45,27 @@ class FramesRequest(BaseModel):
     name: str | None = None
 
 
+class MovingRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=80)
+    start: str | None = None          # YYYY-MM-DD
+    end: str | None = None
+    fov_arcmin: float = Field(4.0, ge=1.0, le=15.0)
+    max_frames: int = Field(40, ge=4, le=120)
+
+
 def _set(job_id, **kw):
     with JOBS_LOCK:
         JOBS[job_id].update(kw)
 
 
-def _run(job_id: str, params: dict):
+def _run(job_id: str, params: dict, fn=None):
     def progress(stage, i, n, msg):
         _set(job_id, stage=stage, done=i, total=n, message=msg)
     try:
-        res = pl.run_frames_job(params, progress)
+        res = (fn or pl.run_frames_job)(params, progress)
         _set(job_id, status="done", result_key=res["key"], message="Done")
+    except mv.AmbiguousName as err:
+        _set(job_id, status="error", message=str(err), candidates=err.candidates)
     except Exception as err:
         traceback.print_exc()
         _set(job_id, status="error", message=str(err))
@@ -86,6 +97,20 @@ def frames(req: FramesRequest):
         JOBS[job_id] = {"status": "running", "stage": "queued", "done": 0, "total": 1,
                         "message": "Queued...", "params": params}
     EXECUTOR.submit(_run, job_id, params_for_key | {"name": params.get("name")})
+    return {"status": "running", "job_id": job_id}
+
+
+@app.post("/api/moving")
+def moving(req: MovingRequest):
+    params = req.model_dump()
+    key = "mv_" + pl.job_key(params)
+    if pl.cached_result(key):
+        return {"status": "done", "result_key": key}
+    job_id = uuid.uuid4().hex[:12]
+    with JOBS_LOCK:
+        JOBS[job_id] = {"status": "running", "stage": "queued", "done": 0, "total": 1,
+                        "message": "Queued...", "params": params}
+    EXECUTOR.submit(_run, job_id, params, mv.run_moving_job)
     return {"status": "running", "job_id": job_id}
 
 

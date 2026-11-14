@@ -41,6 +41,8 @@ h1 { font-size: 20px; margin: 0; letter-spacing: .2px; }
   flex: 1; min-width: 0; background: var(--panel); border: 1px solid var(--line);
   border-radius: 8px; padding: 8px 12px;
 }
+#qmode { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 7px; }
+.demos button.sso { border-color: #6b5bd6; }
 .fov { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; }
 .fov select { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 7px; }
 .demos { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 6px; }
@@ -111,6 +113,10 @@ h1 { font-size: 20px; margin: 0; letter-spacing: .2px; }
 .links { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; font-size: 12.5px; }
 .links a { padding: 4px 9px; border: 1px solid var(--line); border-radius: 999px; text-decoration: none; }
 
+.layout > .context { grid-column: 1; }
+.layout > .side { grid-column: 2; grid-row: 1 / span 2; }
+#aladin { width: 100%; height: 360px; border-radius: 8px; overflow: hidden; margin-top: 8px; background: #05080d; }
+#survey { background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; margin-left: 6px; }
 .plot { width: 100%; height: 300px; }
 .small-plot { height: 220px; }
 .tips { padding-left: 18px; margin: 0; line-height: 1.5; color: var(--text); }
@@ -122,8 +128,9 @@ h1 { font-size: 20px; margin: 0; letter-spacing: .2px; }
 
 @media (max-width: 900px) {
   .layout { grid-template-columns: 1fr; padding: 12px; }
+  .layout > .context, .layout > .side { grid-column: 1; grid-row: auto; }
   .topbar { grid-template-columns: 1fr; padding: 12px; }
   .search { flex-wrap: wrap; }
-  .search input[type=text] { flex-basis: 100%; }
+  .search input[type=text] { flex-basis: 100%; order: -1; }
   .group input[type=range] { width: 90px; }
 }

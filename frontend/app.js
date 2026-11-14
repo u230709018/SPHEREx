@@ -48,7 +48,10 @@ function parseCoords(text) {
 }
 async function api(path, opts) {
   const r = await fetch(path, opts);
-  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.statusText);
+  if (!r.ok) {
+    const d = (await r.json().catch(() => ({}))).detail;
+    throw new Error(Array.isArray(d) ? d.map((x) => `${(x.loc || []).slice(-1)[0]}: ${x.msg}`).join("; ") : d || r.statusText);
+  }
   return r.json();
 }
 function percentile(sorted, p) {
@@ -133,7 +136,11 @@ function rebuildDisplay() {
     });
   } else {
     const base = eps.map((ep) => composite(ep, dets));
-    if (S.mode === "diff") {
+    if (S.mode === "stack") {
+      const valid = base.filter(Boolean);
+      const st = valid.length ? medianOthers(valid, -1) : null;
+      S.display = base.map(() => [st]);
+    } else if (S.mode === "diff") {
       S.display = base.map((a, k) => {
         if (!a) return [null];
         const m = medianOthers(base, k), o = new Float32Array(a.length);
@@ -203,7 +210,14 @@ function render() {
   ctx.imageSmoothingEnabled = false;
   ctx.drawImage(off, v.sx, v.sy, v.sw, v.sw, 0, 0, cv.width, cv.height);
   const e = S.epochs[S.cur];
-  $("epochLabel").textContent = `${e.date_start}${e.date_end !== e.date_start ? " → " + e.date_end.slice(5) : ""} · ${e.n_images} images · ${S.mode === "color" ? "colour" : S.mode === "cdiff" ? "D5+D6 − D4" : [...S.dets].join("+")}${S.mode === "diff" ? " − median" : ""}`;
+  if (isMoving()) {
+    $("epochLabel").textContent = S.mode === "stack"
+      ? `Stack of ${S.epochs.length} frames (shift-and-add on the object)`
+      : `${e.date_start} UT · ${e.dets[0]} · ${e.geo_au != null ? e.geo_au.toFixed(2) + " au from Earth" : ""}${e.vmag != null ? " · V≈" + e.vmag.toFixed(1) : ""}`;
+  } else {
+    $("epochLabel").textContent = S.mode === "stack" ? `Stack of all ${S.epochs.length} visits`
+      : `${e.date_start}${e.date_end !== e.date_start ? " → " + e.date_end.slice(5) : ""} · ${e.n_images} images · ${S.mode === "color" ? "colour" : S.mode === "cdiff" ? "D5+D6 − D4" : [...S.dets].join("+")}${S.mode === "diff" ? " − median" : ""}`;
+  }
   document.querySelectorAll(".timeline button").forEach((b, i) => b.classList.toggle("cur", i === S.cur));
   drawOverlay();
 }
@@ -227,6 +241,14 @@ function drawOverlay() {
   if ($("ovBorder").checked && S.cur === 0) {
     ctx.setLineDash([10, 6]); ctx.strokeStyle = "#ffb547"; ctx.lineWidth = 4;
     ctx.strokeRect(2, 2, cv.width - 4, cv.height - 4); ctx.setLineDash([]);
+  }
+  if (isMoving()) {   // frames are centred on the object: just mark the centre
+    if ($("ovTarget").checked) {
+      const c = $("overlay").width / 2, r = Math.max(10, px * 2.2);
+      ctx.strokeStyle = "#c58cff"; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(c, c, r, 0, 2 * Math.PI); ctx.stroke();
+    }
+    return;
   }
   if ($("ovGaia").checked && S.gaia) {
     for (const s of S.gaia.sources) {
@@ -286,24 +308,38 @@ function showProgress(on, msg, frac) {
 }
 async function loadTarget(t, fov) {
   S.target = t; S.fov = fov; S.gaia = null; S.ast = null; S.spec = null; S.specLabel = null;
-  $("ovAst").checked = false;
+  $("ovAst").checked = false; $("candidates").hidden = true;
   $("empty").hidden = true; $("targetName").textContent = t.name || `${sexa(t.ra, true)} ${sexa(t.dec)}`;
   const pm = Math.hypot(t.pmra || 0, t.pmdec || 0);
   $("targetInfo").textContent = `${t.kind ? t.kind + " · " : ""}RA ${sexa(t.ra, true)} Dec ${sexa(t.dec)} (epoch ${t.ref_epoch || 2000})${pm > 50 ? ` · moves ${(pm / 1000).toFixed(2)}″/yr` : ""}`;
   setHash();
-  showProgress(true, "Contacting the SPHEREx archive…", 0.02);
   const body = { ra: t.ra, dec: t.dec, pmra: t.pmra || 0, pmdec: t.pmdec || 0, ref_epoch: t.ref_epoch || 2000,
                  fov_arcmin: fov, max_per_cell: 8, budget: 260, name: t.name || null };
+  runJob("/api/frames", body, "Could not load this field.");
+}
+async function loadObject(name, fov) {
+  S.target = { name, sso: true, pmra: 0, pmdec: 0 }; S.fov = Math.min(fov || 4, 15); setFovOption(S.fov);
+  S.gaia = null; S.ast = null; S.spec = null; S.specLabel = null; $("ovAst").checked = false;
+  $("empty").hidden = true; $("candidates").hidden = true;
+  $("targetName").textContent = name;
+  $("targetInfo").textContent = "Solar System object · frames centred on the object (stars stream past)";
+  setHash();
+  const body = { name, fov_arcmin: S.fov, max_frames: 40 };
+  if (name === "3I") Object.assign(body, { start: "2025-08-01", end: "2025-12-31" });  // demo: SPHEREx's two 3I/ATLAS campaigns
+  runJob("/api/moving", body, "Could not track this object.");
+}
+async function runJob(path, body, failMsg) {
+  showProgress(true, "Contacting the SPHEREx archive…", 0.02);
   const token = Symbol(); S.pending = token;
   try {
-    let r = await api("/api/frames", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    let r = await api(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     while (r.status === "running") {
       await new Promise((res) => setTimeout(res, 1500));
       if (S.pending !== token) return;
       const j = await api(`/api/jobs/${r.job_id}`);
       const frac = j.stage === "download" ? 0.1 + 0.75 * (j.done / Math.max(1, j.total)) : j.stage === "process" ? 0.9 : 0.05;
       showProgress(true, j.message, frac);
-      if (j.status === "error") throw new Error(j.message);
+      if (j.status === "error") { const e = new Error(j.message); e.candidates = j.candidates; throw e; }
       if (j.status === "done") r = { status: "done", result_key: j.result_key };
     }
     showProgress(true, "Rendering…", 0.97);
@@ -313,11 +349,25 @@ async function loadTarget(t, fov) {
   } catch (err) {
     showProgress(false);
     $("empty").hidden = false;
-    $("empty").innerHTML = `<p><b>Could not load this field.</b><br>${err.message}</p>`;
+    $("empty").innerHTML = `<p><b>${failMsg}</b><br>${err.message}</p>`;
+    if (err.candidates) {
+      const box = $("candidates");
+      box.hidden = false;
+      box.innerHTML = "Did you mean: " + err.candidates.map((c) => `<button data-n="${c.naif}" class="sso">${c.name} <span class="k">${c.type}</span></button>`).join("");
+      box.querySelectorAll("button").forEach((b) => (b.onclick = () => loadObject(b.dataset.n, +$("fov").value)));
+    }
   }
 }
+const isMoving = () => S.result && S.result.mode === "moving";
 function onResult(res) {
   S.result = res; S.key = res.key; S.epochs = res.epochs; S.cur = 0;
+  if (res.mode === "moving") {
+    S.dets = new Set(DETS);                 // each frame is a single detector image
+    if (S.mode === "diff" || S.mode === "cdiff") S.mode = "blink";
+    document.querySelectorAll(".mode").forEach((b) => b.classList.toggle("on", b.dataset.mode === S.mode));
+    $("targetName").textContent = res.name;
+  }
+  ["ovGaia", "ovAst"].forEach((id) => ($(id).disabled = res.mode === "moving"));
   normaliseFrames();
   buildTimeline(); buildDetButtons(); rebuildDisplay();
   showProgress(false);
@@ -325,7 +375,8 @@ function onResult(res) {
   S.specLabel = { name: "target", ra: null, dec: null };
   $("specTitle").textContent = "Spectrum at target"; $("specReset").hidden = true;
   plotSpectrum(); plotLightcurve(); buildBadges(); buildWarnings(); buildLinks();
-  fetchGaia();
+  if (!isMoving()) fetchGaia();
+  updateContext();
   play(true);
 }
 function buildTimeline() {
@@ -357,6 +408,16 @@ function buildDetButtons() {
 }
 function buildBadges() {
   const r = S.result, b = [];
+  if (isMoving()) {
+    const days = (S.epochs.at(-1).mjd - S.epochs[0].mjd);
+    b.push(`<span class="badge info">${r.stats.n_total} SPHEREx images of this object · showing ${r.stats.n_used} · ${days.toFixed(0)} days</span>`);
+    const e = parseFloat(r.orbit?.eccentricity);
+    if (e > 1) b.push(`<span class="badge warn">Hyperbolic orbit (e = ${e.toFixed(2)}): interstellar visitor</span>`);
+    else if (e >= 0) b.push(`<span class="badge">Orbit e = ${e.toFixed(2)}${r.orbit.semimajor_axis ? `, a = ${(+r.orbit.semimajor_axis).toFixed(2)} au` : ""}</span>`);
+    b.push(`<span class="badge">Ephemeris: JPL Horizons via IRSA MOST</span>`);
+    $("badges").innerHTML = b.join("");
+    return;
+  }
   const span = S.epochs.length > 1 ? (S.epochs.at(-1).mjd - S.epochs[0].mjd) / 365.25 : 0;
   b.push(`<span class="badge info">${r.stats.n_used} images · ${S.epochs.length} visits · ${span.toFixed(1)} yr</span>`);
   if (r.stats.n_total > r.stats.n_downloaded)
@@ -386,6 +447,17 @@ function buildWarnings() {
   $("warnings").innerHTML = items.map((x) => `<li>${x}</li>`).join("");
 }
 function buildLinks() {
+  if (isMoving()) {
+    const n = encodeURIComponent(S.target.name.replace(/:NID$/, "")), d0 = S.epochs[0].date_start.slice(0, 10).replace(/-/g, "+"),
+      d1 = S.epochs.at(-1).date_start.slice(0, 10).replace(/-/g, "+");
+    const L = [
+      ["Same object in other telescopes (CADC SSOIS)", `https://www.cadc-ccda.hia-iha.nrc-cnrc.gc.ca/en/ssois/results.html?lang=en&object=${n}&search=bynameall&epoch1=${d0}&epoch2=${d1}&eellipse=&eunits=arcseconds&extres=no&xyres=no`],
+      ["JPL Small-Body Database", `https://ssd.jpl.nasa.gov/tools/sbdb_lookup.html#/?sstr=${n}`],
+      ["IRSA Moving Object Search Tool", "https://irsa.ipac.caltech.edu/applications/MOST/"],
+    ];
+    $("links").innerHTML = L.map(([t, u]) => `<a href="${u}" target="_blank" rel="noopener">${t} ↗</a>`).join("");
+    return;
+  }
   const ra = S.result.grid.crval[0], dec = S.result.grid.crval[1], fov = S.fov;
   const L = [
     ["Open in WiseView (13 yr of WISE)", `https://byw.tools/wiseview#ra=${ra.toFixed(6)}&dec=${dec.toFixed(6)}&size=${Math.round(fov * 60)}&band=3&speed=500&minbright=-50.0000&maxbright=500.0000&window=0.5&diff_window=1&linear=1&color=&zoom=9&border=0&gaia=0&invert=1&maxdyr=0&scandir=0&neowise=0&diff=0&outer_epochs=0&unique_window=1&smooth_scan=0&shift=0&pmra=0&pmdec=0&synth_a=0&synth_b=0`],
@@ -429,6 +501,78 @@ async function fetchAsteroids() {
   drawOverlay();
 }
 
+// ---------------------------------------------------------------- Aladin sky context
+let aladin = null, aladinReady = null;
+function ensureAladin() {
+  if (aladinReady) return aladinReady;
+  aladinReady = new Promise((resolve) => {
+    const start = () => {
+      if (!window.A) return setTimeout(start, 300);
+      A.init.then(() => {
+        aladin = A.aladin("#aladin", { survey: $("survey").value, fov: 0.2, projection: "TAN",
+          showReticle: false, showLayersControl: false, showGotoControl: false, showFrame: false,
+          showFullscreenControl: true, showCooGridControl: false, showSimbadPointerControl: true });
+        resolve(aladin);
+      }).catch(() => resolve(null));
+    };
+    start();
+  });
+  return aladinReady;
+}
+function propagateJs(t, jyear) {
+  const dt = jyear - (t.ref_epoch || 2000);
+  const dec = t.dec + ((t.pmdec || 0) * dt) / 3.6e6;
+  return [t.ra + ((t.pmra || 0) * dt) / 3.6e6 / Math.cos(t.dec * D2R), dec];
+}
+async function updateContext() {
+  $("contextCard").hidden = false;
+  const al = await ensureAladin();
+  if (!al || !S.result) return;
+  const [ny, nx] = S.result.grid.shape, c = S.result.grid.crval;
+  al.removeLayers?.();
+  if (isMoving()) {
+    const pts = S.epochs.map((e) => [e.target_ra, e.target_dec]);
+    const ras = pts.map((p) => p[0]), decs = pts.map((p) => p[1]);
+    const mid = pts[Math.floor(pts.length / 2)];
+    const span = Math.max(Math.max(...decs) - Math.min(...decs), (Math.max(...ras) - Math.min(...ras)) * Math.cos(mid[1] * D2R));
+    al.gotoRaDec(mid[0], mid[1]); al.setFoV(Math.min(180, Math.max(0.5, span * 1.3)));
+    const tr = A.graphicOverlay({ color: "#c58cff", lineWidth: 2, name: "Object path" });
+    al.addOverlay(tr); tr.add(A.polyline(pts));
+    const marks = A.catalog({ name: "Frames", sourceSize: 8, color: "#c58cff", displayLabel: true, labelColumn: "label", labelColor: "#e2c8ff" });
+    al.addCatalog(marks);
+    marks.addSources(S.epochs.map((e, i) => A.source(e.target_ra, e.target_dec,
+      { label: i === 0 || i === S.epochs.length - 1 || S.epochs[i].date_start.slice(0, 7) !== S.epochs[i - 1].date_start.slice(0, 7) ? e.date_start.slice(0, 10) : "" })));
+    $("contextNote").textContent = `Purple: path of ${S.result.name} across the sky at the times SPHEREx imaged it (${S.epochs[0].date_start.slice(0, 10)} → ${S.epochs.at(-1).date_start.slice(0, 10)}). Powered by Aladin Lite (CDS).`;
+    return;
+  }
+  al.gotoRaDec(c[0], c[1]);
+  al.setFoV((S.fov / 60) * 1.8);
+  const fp = A.graphicOverlay({ color: "#4fb3ff", lineWidth: 2, name: "SPHEREx field" });
+  al.addOverlay(fp);
+  const corners = [[-0.5, -0.5], [nx - 0.5, -0.5], [nx - 0.5, ny - 0.5], [-0.5, ny - 0.5]].map(([x, y]) => pix2world(x, y));
+  fp.add(A.polygon(corners));
+  const t = S.target, pm = Math.hypot(t.pmra || 0, t.pmdec || 0);
+  if (pm > 100) {
+    const track = A.graphicOverlay({ color: "#ffb547", lineWidth: 2, name: "Proper-motion track" });
+    al.addOverlay(track);
+    const pts = [];
+    for (let y = 1950; y <= 2030; y += 2) pts.push(propagateJs(t, y));
+    track.add(A.polyline(pts));
+    const marks = A.catalog({ name: "Epochs", sourceSize: 12, shape: "circle", color: "#ffb547",
+      displayLabel: true, labelColumn: "label", labelColor: "#ffd28a", labelFont: "12px sans-serif" });
+    al.addCatalog(marks);
+    const e0 = S.epochs[0], e1 = S.epochs.at(-1);
+    const stops = [[1953, "1953 POSS-I"], [1993, "1993 DSS2"], [2016, "2016 Gaia"],
+                   [e1.jyear, `${e0.date_start.slice(0, 4)}–${e1.date_start.slice(0, 4)} SPHEREx`]];
+    marks.addSources(stops.map(([y, label]) => { const [ra, dec] = propagateJs(t, y); return A.source(ra, dec, { label }); }));
+    const moved = (pm / 1000) * (e1.jyear - 1953) / 60;
+    $("contextNote").textContent = `Orange track: ${t.name || "target"} moved ${moved.toFixed(1)}′ since the 1953 Palomar plates (${(pm / 1000).toFixed(2)}″/yr). Switch the background to compare decades. Blue square: the SPHEREx field above. Powered by Aladin Lite (CDS).`;
+    if (moved * 60 > S.fov * 60 * 0.6) al.setFoV(Math.max((S.fov / 60) * 1.8, (moved / 60) * 1.4));
+  } else {
+    $("contextNote").textContent = "Blue square: the SPHEREx field shown above. Use the background menu to compare with other surveys. Powered by Aladin Lite (CDS).";
+  }
+}
+
 // ---------------------------------------------------------------- charts
 const PLOT_LAYOUT = {
   paper_bgcolor: "rgba(0,0,0,0)", plot_bgcolor: "rgba(0,0,0,0)", font: { color: "#cfd8e8", size: 11 },
@@ -440,7 +584,16 @@ function plotSpectrum() {
   if (!window.Plotly || !S.spec) return;
   const pts = S.spec.points.filter((p) => p.wavelength_um);
   const traces = [];
+  if (S.epochs.length > 8) {   // many visits (e.g. moving objects): one trace, colour = date
+    const g = pts.filter((p) => p.good);
+    traces.push({ x: g.map((p) => p.wavelength_um), y: g.map((p) => p.flux_mjy), mode: "markers", type: "scatter", name: "measurements",
+      text: g.map((p) => mjdToDate(p.mjd)),
+      marker: { size: 6, color: g.map((p) => p.mjd), colorscale: "Viridis", showscale: false },
+      error_y: { type: "data", array: g.map((p) => p.err_mjy || 0), visible: true, thickness: 1, width: 0, color: "rgba(200,210,230,.35)" },
+      hovertemplate: "%{x:.3f} µm<br>%{y:.3f} mJy<br>%{text}<extra></extra>" });
+  }
   S.epochs.forEach((e, k) => {
+    if (S.epochs.length > 8) return;
     const g = pts.filter((p) => p.epoch === e.epoch && p.good);
     if (!g.length) return;
     traces.push({ x: g.map((p) => p.wavelength_um), y: g.map((p) => p.flux_mjy), mode: "markers", type: "scatter",
@@ -487,7 +640,8 @@ function mjdToDate(m) { return new Date((m - 40587) * 86400000).toISOString().sl
 function setHash() {
   if (!S.target) return;
   const t = S.target, h = new URLSearchParams();
-  if (t.id) h.set("target", t.id);
+  if (t.sso) h.set("object", t.name);
+  else if (t.id) h.set("target", t.id);
   else { h.set("ra", t.ra.toFixed(6)); h.set("dec", t.dec.toFixed(6)); if (t.pmra) h.set("pmra", t.pmra); if (t.pmdec) h.set("pmdec", t.pmdec); if (t.ref_epoch && t.ref_epoch !== 2000) h.set("epoch", t.ref_epoch); if (t.name) h.set("name", t.name); }
   h.set("fov", S.fov); h.set("mode", S.mode); h.set("dets", [...S.dets].join(","));
   h.set("speed", $("speed").value); if (!$("invert").checked) h.set("invert", "0"); if (+$("zoom").value !== 1) h.set("zoom", $("zoom").value);
@@ -498,7 +652,9 @@ function setMode(m) {
   setHash(); rebuildDisplay();
 }
 async function submitQuery(text) {
-  const fov = +$("fov").value, c = parseCoords(text);
+  const fov = +$("fov").value;
+  if ($("qmode").value === "sso") return loadObject(text, fov);
+  const c = parseCoords(text);
   if (c) return loadTarget({ name: null, ra: c.ra, dec: c.dec, pmra: 0, pmdec: 0, ref_epoch: 2000 }, fov);
   try {
     const r = await api(`/api/resolve?q=${encodeURIComponent(text)}`);
@@ -507,9 +663,19 @@ async function submitQuery(text) {
     $("empty").hidden = false; $("empty").innerHTML = `<p>${err.message}</p>`;
   }
 }
+function setFovOption(v) {
+  if (!(v >= 1 && v <= 20)) return;
+  const sel = $("fov");
+  if (![...sel.options].some((o) => +o.value === v)) {
+    const o = document.createElement("option"); o.value = v; o.textContent = `${v}′`;
+    sel.appendChild(o);
+    [...sel.options].sort((a, b) => a.value - b.value).forEach((x) => sel.appendChild(x));
+  }
+  sel.value = String(v);
+}
 async function initFromHash(targets) {
   const h = new URLSearchParams(location.hash.slice(1));
-  if (h.get("fov")) $("fov").value = h.get("fov");
+  if (h.get("fov")) setFovOption(+h.get("fov"));
   if (h.get("mode")) S.mode = h.get("mode");
   if (h.get("dets")) S.dets = new Set(h.get("dets").split(",").filter((d) => DETS.includes(d)));
   if (h.get("speed")) $("speed").value = h.get("speed");
@@ -517,6 +683,7 @@ async function initFromHash(targets) {
   if (h.get("zoom")) $("zoom").value = h.get("zoom");
   document.querySelectorAll(".mode").forEach((b) => b.classList.toggle("on", b.dataset.mode === S.mode));
   const fov = +$("fov").value;
+  if (h.get("object")) { $("qmode").value = "sso"; return loadObject(h.get("object"), fov); }
   if (h.get("target")) {
     const t = targets.find((x) => x.id === h.get("target"));
     if (t) return loadTarget(t, fov);
@@ -530,8 +697,11 @@ async function initFromHash(targets) {
 async function main() {
   let targets = [];
   try { targets = await api("/api/targets"); } catch { /* offline */ }
-  $("demos").innerHTML = targets.map((t) => `<button data-id="${t.id}" title="${t.note}">${t.name}<span class="k">${t.kind}</span></button>`).join("");
-  $("demos").querySelectorAll("button").forEach((b) => (b.onclick = () => {
+  $("demos").innerHTML = targets.map((t) => `<button data-id="${t.id}" title="${t.note}">${t.name}<span class="k">${t.kind}</span></button>`).join("")
+    + `<button class="sso" data-obj="3I" title="Interstellar comet 3I/ATLAS, imaged by SPHEREx in Aug and Dec 2025">3I/ATLAS<span class="k">interstellar comet</span></button>`;
+  $("demos").querySelector("[data-obj]").onclick = () => { $("qmode").value = "sso"; loadObject("3I", 4); };
+  $("demos").querySelectorAll("button[data-id]").forEach((b) => (b.onclick = () => {
+    $("qmode").value = "sky";
     const t = targets.find((x) => x.id === b.dataset.id);
     if (t.id === "wise0855" || t.id === "eps_ind_b") { S.dets = new Set(["D5", "D6"]); }
     else if (t.id === "barnard") { S.dets = new Set(["D2", "D3"]); }
@@ -548,6 +718,11 @@ async function main() {
   $("zoom").oninput = () => { render(); setHash(); };
   $("speed").oninput = () => setHash();
   ["ovTarget", "ovGaia", "ovBorder"].forEach((id) => ($(id).onchange = drawOverlay));
+  $("survey").onchange = async () => {
+    const al = await ensureAladin();
+    if (!al) return;
+    (al.setBaseImageLayer || al.setImageSurvey).call(al, $("survey").value);
+  };
   $("ovAst").onchange = () => { if ($("ovAst").checked && !S.ast && S.result) fetchAsteroids(); else drawOverlay(); };
   $("specReset").onclick = () => {
     S.spec = { points: S.result.points, lightcurve: S.result.lightcurve }; S.specLabel = { name: "target" };
@@ -558,10 +733,10 @@ async function main() {
     if (!S.result) return;
     const r = ov.getBoundingClientRect(), cx = ((ev.clientX - r.left) / r.width) * ov.width, cy = ((ev.clientY - r.top) / r.height) * ov.height;
     const [x, y] = fromCanvas(cx, cy), [ra, dec] = pix2world(x, y);
-    $("readout").textContent = `${sexa(ra, true)} ${sexa(dec)}`;
+    $("readout").textContent = isMoving() ? "object-centred frame" : `${sexa(ra, true)} ${sexa(dec)}`;
   });
   ov.addEventListener("click", async (ev) => {
-    if (!S.result) return;
+    if (!S.result || isMoving()) return;
     const r = ov.getBoundingClientRect(), cx = ((ev.clientX - r.left) / r.width) * ov.width, cy = ((ev.clientY - r.top) / r.height) * ov.height;
     const [ra, dec] = pix2world(...fromCanvas(cx, cy));
     S.specLabel = { ra, dec }; drawOverlay();
@@ -579,6 +754,7 @@ async function main() {
     else if (k === "arrowleft") { play(false); step(-1); }
     else if (k === "arrowright") { play(false); step(1); }
     else if (k === "b") setMode("blink"); else if (k === "d") setMode("diff"); else if (k === "c") setMode("color");
+    else if (k === "s") setMode("stack");
     else if (k === "i") { $("invert").checked = !$("invert").checked; render(); setHash(); }
     else if (k === "+" || k === "=") { $("zoom").value = Math.min(4, +$("zoom").value + 0.25); render(); }
     else if (k === "-") { $("zoom").value = Math.max(1, +$("zoom").value - 0.25); render(); }
