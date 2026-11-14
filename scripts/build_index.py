@@ -9,7 +9,9 @@ measured here once ("calibrate"). Only ~9 kB of each 65 MB file is read.
 Output: data/index/spherex_index.npz
   centre unit vectors (x, y, z) of the reference detector, its TAN WCS, MJD, file naming parts.
 
-Usage:  python scripts/build_index.py            (resumes if interrupted)
+Usage:  python scripts/list_s3.py                (list the bucket, all releases)
+        python scripts/build_index.py            (resumes if interrupted; exposures already in
+                                                  the existing index are not read again)
 
 Written with the assistance of an AI coding assistant (Claude, Anthropic); see README "Use of AI".
 """
@@ -146,8 +148,20 @@ def main():
     if not cal.exists():
         cal.write_text(json.dumps(calibrate(exposures)))
 
+    # Exposures already in the existing index are not read again: after a new release only the
+    # new files are fetched (minutes instead of hours on a fresh clone).
+    known = {}
+    old = IDX / "spherex_index.npz"
+    if old.exists():
+        with np.load(old) as z:      # read each array once (indexing the NpzFile re-reads it every time)
+            wcs0, mjd0, ref0, rel0, obs0 = z["wcs"], z["mjd"], z["ref"], z["rel"], z["obs"]
+        names = [k for k in WANT if k != "MJD-OBS"]
+        for i in range(len(mjd0)):
+            v = dict(zip(names, map(float, wcs0[i])), **{"MJD-OBS": float(mjd0[i])})
+            known[(str(rel0[i]), str(obs0[i]))] = (int(ref0[i]), v)
+        print(len(known), "exposures taken from the existing index", flush=True)
     part = IDX / "pointing_partial.jsonl"
-    done = set()
+    done = set(known)
     if part.exists():
         for line in part.read_text().splitlines():
             try:
@@ -175,7 +189,7 @@ def main():
                 print(f"{i}/{len(todo)}  {rate:.0f}/s  eta {(len(todo) - i) / rate / 60:.1f} min", flush=True)
 
     # ---- pack
-    point = {}
+    point = dict(known)
     for line in part.read_text().splitlines():
         rel, obs, ref, v = json.loads(line)
         if v:

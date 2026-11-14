@@ -21,6 +21,7 @@ const S = {
   result: null, key: null, z: new Map(), epochs: [], cur: 0, playing: true, timer: null,
   mode: "blink", dets: new Set(["D5", "D6"]), display: [], limits: null,
   gaia: null, ast: null, spec: null, specLabel: null, target: null, fov: 5, pending: null,
+  embed: false,
 };
 
 // ---------------------------------------------------------------- helpers
@@ -39,6 +40,7 @@ function parseCoords(text) {
   }
   const sx = text.trim().match(/^(\d{1,2})[: h](\d{1,2})[: m](\d{1,2}(?:\.\d+)?)s?\s*,?\s*([-+]?\d{1,2})[: d°](\d{1,2})[: m′'](\d{1,2}(?:\.\d+)?)/);
   if (sx) {
+    if ([sx[2], sx[3], sx[5], sx[6]].some((v) => +v >= 60)) return { ra: NaN, dec: NaN };   // minutes/seconds must be < 60
     const ra = 15 * (+sx[1] + sx[2] / 60 + sx[3] / 3600);
     const sgn = sx[4].startsWith("-") ? -1 : 1;
     const dec = sgn * (Math.abs(+sx[4]) + sx[5] / 60 + sx[6] / 3600);
@@ -397,6 +399,14 @@ function drawOverlay() {
     ctx.strokeStyle = "#4fb3ff"; ctx.lineWidth = 2;
     ctx.beginPath(); ctx.arc(x, y, r, 0, 2 * Math.PI); ctx.stroke();
   }
+  ctx.strokeStyle = ctx.fillStyle = "#ffd25a"; ctx.lineWidth = 1.5; ctx.font = "11px system-ui";   // saved candidates
+  const [ra0, dec0] = S.result.grid.crval;
+  for (const c of loadSaved()) {
+    // only candidates in this field: far-away points can project into the canvas through the TAN projection
+    if (Math.hypot((((c.ra - ra0 + 540) % 360) - 180) * Math.cos(dec0 * D2R), c.dec - dec0) > 1) continue;
+    const [x, y] = toCanvas(...world2pix(c.ra, c.dec));
+    if (x > 0 && y > 0 && x < cv.width && y < cv.height) { ctx.strokeRect(x - 7, y - 7, 14, 14); ctx.fillText("★", x + 9, y - 6); }
+  }
   if (S.specLabel && S.specLabel.ra != null) {
     const [x, y] = toCanvas(...world2pix(S.specLabel.ra, S.specLabel.dec));
     ctx.strokeStyle = "#ffb547"; ctx.lineWidth = 2;
@@ -610,6 +620,8 @@ function buildBadges() {
     b.push(`<span class="badge" title="To stay fast, up to 8 images per visit and detector are used">${r.stats.n_total} images in archive${r.stats.n_total > 1000 ? " (deep field)" : ""}</span>`);
   const pm = Math.hypot(S.target.pmra || 0, S.target.pmdec || 0);
   if (pm > 500) b.push(`<span class="badge warn">High proper motion: ${(pm / 1000).toFixed(1)}″/yr → ${(pm / 1000 * span / 6.15).toFixed(1)} px over the data</span>`);
+  const latest = S.sph.map((e) => e.date_end).sort().at(-1);
+  b.push(`<span class="badge" title="Date of the newest SPHEREx image used for this field. A new position is looked up in the archive on first load and then kept; see the README for refreshing after a data release.">Latest image: ${latest}</span>`);
   b.push(`<span class="badge" id="gaiaBadge">Gaia: checking…</span>`);
   b.push(`<span class="badge info" id="archBadge" hidden title="Archival 2MASS and WISE images from NASA/IPAC IRSA are blinked together with the SPHEREx visits"></span>`);
   b.push(`<span class="badge" id="pmBadge"></span>`);
@@ -730,6 +742,63 @@ async function fetchAsteroids() {
   } catch { S.ast = null; }
   $("ovAst").disabled = false;
   drawOverlay();
+}
+
+// ---------------------------------------------------------------- saved candidates (kept in this browser)
+const SAVED_KEY = "sxtm.candidates";
+function loadSaved() { try { return JSON.parse(localStorage.getItem(SAVED_KEY)) || []; } catch { return []; } }
+function storeSaved(list) {
+  try { localStorage.setItem(SAVED_KEY, JSON.stringify(list)); } catch { /* storage blocked: the list is lost on reload */ }
+  renderSaved(); drawOverlay();
+}
+function gaiaNear(ra, dec) {   // is a Gaia star within 4″ in the frame on screen? null = Gaia not loaded
+  if (!S.gaia || !S.gaia.provider) return null;
+  const e = S.epochs[S.cur], cosd = Math.cos(dec * D2R);
+  return S.gaia.sources.some((s) => { const p = gaiaPos(s, e); return p && Math.hypot((p[0] - ra) * cosd, p[1] - dec) * 3600 < 4; });
+}
+/* Save the clicked position (or, with nothing clicked, the target) in the frame on screen. */
+function addSaved() {
+  if (!S.result || isMoving()) return;
+  const e = S.epochs[S.cur], clicked = S.specLabel && S.specLabel.ra != null;
+  const ra = clicked ? S.specLabel.ra : e.target_ra, dec = clicked ? S.specLabel.dec : e.target_dec;
+  const g = gaiaNear(ra, dec);
+  // field name and FOV of the result on screen (S.target already changes while a new field loads)
+  const h = new URLSearchParams({ ra: ra.toFixed(6), dec: dec.toFixed(6), fov: S.result.fov_arcmin, mode: S.mode, dets: [...S.dets].join(","), name: "Candidate" });
+  storeSaved([...loadSaved(), { ra, dec, field: S.result.name || "", date: e.archival ? `${e.label} ${e.date_start}` : e.date_start,
+    mode: S.mode, dets: [...S.dets].join("+"), gaia: g == null ? "unknown" : g ? "yes" : "no",
+    link: `${location.origin}${location.pathname}#${h}`, saved: new Date().toISOString() }]);
+}
+function renderSaved() {
+  const list = loadSaved();
+  $("savedCount").textContent = list.length ? `(${list.length})` : "";
+  $("savedCsv").disabled = !list.length;
+  $("savedList").innerHTML = list.length
+    ? list.map((c, i) => `<li><a href="${esc(c.link)}" title="Open a view centred on this position">${sexa(c.ra, true)} ${sexa(c.dec)}</a>
+        <button class="ghost small" data-i="${i}" title="Remove">✕</button><br>
+        <span class="muted">${esc(c.field || "field")} · ${esc(c.date)} · ${esc(c.dets)} · Gaia star: ${esc(c.gaia)}</span></li>`).join("")
+    : `<li class="muted">Nothing saved yet. Click a source on the image, then “Save as candidate”.</li>`;
+  $("savedList").querySelectorAll("button").forEach((b) => (b.onclick = () => { const l = loadSaved(); l.splice(+b.dataset.i, 1); storeSaved(l); }));
+}
+function downloadSaved() {
+  const cols = ["ra_deg", "dec_deg", "ra_hms", "dec_dms", "field", "visit_date", "mode", "detectors", "gaia_star_within_4arcsec", "link", "saved_utc"];
+  const rows = loadSaved().map((c) => [c.ra.toFixed(6), c.dec.toFixed(6), sexa(c.ra, true), sexa(c.dec).replace("−", "-"),
+    c.field, c.date, c.mode, c.dets, c.gaia, c.link, c.saved]);
+  const csv = [cols, ...rows].map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(",")).join("\n");
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" })); a.download = "spherex-candidates.csv"; a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+// ---------------------------------------------------------------- sharing and embedding
+function viewUrl(embed) {
+  const h = new URLSearchParams(location.hash.slice(1));
+  if (embed) h.set("embed", "1"); else h.delete("embed");
+  return `${location.origin}${location.pathname}#${h}`;
+}
+function share(text, btn) {   // show the text ready to copy, and copy it when the browser allows
+  const box = $("shareBox"), label = btn.textContent;
+  box.hidden = false; box.value = text; box.select();
+  navigator.clipboard?.writeText(text).then(() => { btn.textContent = "Copied ✓"; setTimeout(() => (btn.textContent = label), 1500); }).catch(() => {});
 }
 
 // ---------------------------------------------------------------- measured proper motion
@@ -1012,22 +1081,44 @@ function setHash() {
   h.set("fov", S.fov); h.set("mode", S.mode); h.set("dets", [...S.dets].join(","));
   const dr = dateRange(); if (dr.from) h.set("from", dr.from); if (dr.to) h.set("to", dr.to);
   h.set("speed", $("speed").value); if (!$("invert").checked) h.set("invert", "0"); if (+$("zoom").value !== 1) h.set("zoom", $("zoom").value);
+  if (S.embed) h.set("embed", "1");
   history.replaceState(null, "", "#" + h.toString());
+  $("openFull").href = viewUrl(false);
 }
 function setMode(m) {
   S.mode = m; document.querySelectorAll(".mode").forEach((b) => b.classList.toggle("on", b.dataset.mode === m));
   setHash(); rebuildDisplay();
 }
+const esc = (s) => String(s).replace(/[&<>"']/g, (ch) => `&#${ch.charCodeAt(0)};`);
+/* A rejected search: say what is wrong and show the accepted formats as clickable examples. */
+function inputHelp(message) {
+  S.pending = null; showProgress(false);
+  const ex = [["269.452 4.693", "decimal degrees"], ["08:55:10.8 -07:14:42", "hours and degrees"],
+              ["Barnard's Star", "a name known to SIMBAD"], ["M 31", "catalogue name"]];
+  $("empty").hidden = false;
+  $("empty").innerHTML = `<p><b>${esc(message)}</b></p>
+    <p class="small">Accepted input (click an example to try it):</p>
+    <p class="examples">${ex.map(([q, what]) => `<button type="button" data-q="${esc(q)}">${esc(q)}<span class="k">${what}</span></button>`).join("")}</p>
+    <p class="small">RA runs from 0° to 360° (or 0h to 24h), Dec from −90° to +90°.<br>
+    Names follow SIMBAD spelling, e.g. <i>WISE J085510.83-071442.5</i>. Asteroids and comets: switch the menu to “Solar System object”.</p>`;
+  $("empty").querySelectorAll("button[data-q]").forEach((b) => (b.onclick = () => { $("q").value = b.dataset.q; submitQuery(b.dataset.q); }));
+}
 async function submitQuery(text) {
   const fov = +$("fov").value;
   if ($("qmode").value === "sso") return loadObject(text, fov);
   const c = parseCoords(text);
-  if (c) return loadTarget({ name: null, ra: c.ra, dec: c.dec, pmra: 0, pmdec: 0, ref_epoch: 2000 }, fov);
+  if (c) {
+    if (Number.isNaN(c.ra)) return inputHelp("Minutes and seconds in a position must be below 60.");
+    if (!(c.ra >= 0 && c.ra < 360 && Math.abs(c.dec) <= 90))
+      return inputHelp(`These coordinates are outside the sky: RA ${fmt(c.ra, 3)}°, Dec ${fmt(c.dec, 3)}°.`);
+    return loadTarget({ name: null, ra: c.ra, dec: c.dec, pmra: 0, pmdec: 0, ref_epoch: 2000 }, fov);
+  }
+  if (!/[a-z]/i.test(text)) return inputHelp(`“${text}” is not a complete position: give both RA and Dec.`);
   try {
     const r = await api(`/api/resolve?q=${encodeURIComponent(text)}`);
     loadTarget(r, fov);
   } catch (err) {
-    $("empty").hidden = false; $("empty").innerHTML = `<p>${err.message}</p>`;
+    inputHelp(err.message);
   }
 }
 function setFovOption(v) {
@@ -1042,11 +1133,15 @@ function setFovOption(v) {
 }
 async function initFromHash(targets) {
   const h = new URLSearchParams(location.hash.slice(1));
+  S.embed = h.get("embed") === "1";            // embed=1: viewer only, for <iframe> use on other sites
+  document.body.classList.toggle("embed", S.embed);
   if (h.get("fov")) setFovOption(+h.get("fov"));
   if (h.get("mode")) S.mode = h.get("mode");
   if (h.get("dets")) S.dets = new Set(h.get("dets").split(",").filter((d) => DETS.includes(d)));
-  if (/^\d{4}-\d{2}-\d{2}$/.test(h.get("from") || "")) $("dFrom").value = h.get("from");
-  if (/^\d{4}-\d{2}-\d{2}$/.test(h.get("to") || "")) $("dTo").value = h.get("to");
+  // always follow the link (also cleared): a saved-candidate link opened later must not inherit old dates
+  $("dFrom").value = /^\d{4}-\d{2}-\d{2}$/.test(h.get("from") || "") ? h.get("from") : "";
+  $("dTo").value = /^\d{4}-\d{2}-\d{2}$/.test(h.get("to") || "") ? h.get("to") : "";
+  if (!h.get("object")) $("qmode").value = "sky";
   if (h.get("speed")) $("speed").value = h.get("speed");
   if (h.get("invert") === "0") $("invert").checked = false;
   if (h.get("zoom")) $("zoom").value = h.get("zoom");
@@ -1066,6 +1161,9 @@ async function initFromHash(targets) {
 async function main() {
   let targets = [];
   try { targets = await api("/api/targets"); } catch { /* offline */ }
+  api("/api/index").then((i) => {   // how recent the searchable SPHEREx data is
+    if (i.available) $("indexNote").textContent = ` Searchable SPHEREx images: up to ${mjdToDate(i.mjd_max)} (index updated ${i.built.slice(0, 10)}).`;
+  }).catch(() => {});
   $("demos").innerHTML = targets.map((t) => `<button data-id="${t.id}" title="${t.note}">${t.name}<span class="k">${t.kind}</span></button>`).join("")
     + `<button class="sso" data-obj="3I" title="Interstellar comet 3I/ATLAS, imaged by SPHEREx in Aug and Dec 2025">3I/ATLAS<span class="k">interstellar comet</span></button>`;
   $("demos").querySelector("[data-obj]").onclick = () => { $("qmode").value = "sso"; loadObject("3I", 4); };
@@ -1088,6 +1186,12 @@ async function main() {
   $("speed").oninput = () => setHash();
   ["ovTarget", "ovGaia", "ovBorder", "ovCand"].forEach((id) => ($(id).onchange = drawOverlay));
   $("ovArch").onchange = () => { rebuildDisplay(); showMotionBadge(); };
+  $("saveCand").onclick = addSaved;
+  $("savedCsv").onclick = downloadSaved;
+  $("copyLink").onclick = () => share(viewUrl(false), $("copyLink"));
+  $("copyEmbed").onclick = () => share(`<iframe src="${viewUrl(true)}" width="600" height="760" style="border:0" loading="lazy" title="SPHEREx Time Machine"></iframe>`, $("copyEmbed"));
+  renderSaved();
+  window.addEventListener("hashchange", () => initFromHash(targets));   // opening a saved candidate link
   ["dFrom", "dTo"].forEach((id) => ($(id).onchange = onRangeChange));
   $("dTo").max = new Date().toISOString().slice(0, 10);
   $("pickLoad").onclick = () => {

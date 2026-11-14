@@ -10,7 +10,7 @@ A public web tool for the NASA Space Apps Challenge 2026 *"Planet X and SPHEREx"
 
 ## Features
 
-- **Blink** SPHEREx images of any position, one frame per visit (DR1 + QR3 + deep fields, queried live from NASA/IPAC IRSA, so newly released data appears automatically).
+- **Blink** SPHEREx images of any position, one frame per visit (DR1 + QR3 + deep fields, found in our own index of the public archive; a new release is added with two scripts, see "Keeping up with new SPHEREx data").
 - **Six detector arrays** selectable individually or combined; frames are co-added per visit and detector for signal-to-noise.
 - **Difference mode**: each visit minus the median of the other visits. Static stars cancel; movers leave a dipole.
 - **False-colour mode** (blue = D1+D2, green = D3+D4, red = D5+D6) and **D6−D4 mode**: cold brown dwarfs are bright at 4.5 µm but dark in the 3.3 µm methane band.
@@ -23,7 +23,10 @@ A public web tool for the NASA Space Apps Challenge 2026 *"Planet X and SPHEREx"
 - **Overlays**: Gaia DR3 (propagated to each visit from J2016.0, fast movers drawn with motion arrows), known asteroids and comets (JPL Small-Body Identification), target track.
 - **"No Gaia counterpart" badge**: a moving source invisible to Gaia is too cold for optical light – the classic brown-dwarf signature used by citizen scientists.
 - **Data-quality notes** from SPHEREx pixel flags (ghosts, streaks, cosmic rays, persistence) at the measured position; frames with heavy transient contamination are skipped.
-- **Shareable/embeddable URLs**: every setting lives in the URL, e.g. `/#target=wise0855&mode=diff&dets=D5,D6` or `/#ra=269.452&dec=4.693&pmra=-802&pmdec=10362&fov=8`.
+- **Candidate list**: click a source, press "Save as candidate", and download your list as CSV (coordinates, visit date, Gaia match within 4″, link back to the view) to share with a science team. Saved positions are marked with a small yellow ★ square. The list stays in the browser; nothing is uploaded.
+- **Shareable URLs**: every setting lives in the URL, e.g. `/#target=wise0855&mode=diff&dets=D5,D6` or `/#ra=269.452&dec=4.693&pmra=-802&pmdec=10362&fov=8`; "Copy link" copies the current view.
+- **Embeddable**: add `&embed=1` for a viewer-only page, or use "Copy embed code" for a ready `<iframe>` snippet: `<iframe src="https://spherex-time-machine.onrender.com/#target=wise0855&mode=diff&dets=D5,D6&embed=1" width="600" height="760"></iframe>`.
+- **Input help**: positions outside the sky, minutes or seconds of 60 or more, incomplete coordinates and unknown names get a clear message with clickable examples of the accepted formats. Names are resolved by SIMBAD (Harvard mirror) and CDS Sesame; "no such object" and "name services unreachable" are reported separately.
 - **Links out**: WiseView (13 years of WISE), SIMBAD, CADC SSOIS (other telescopes at this position), Legacy Survey, IRSA SPHEREx Data Explorer.
 - Keyboard: Space play/pause · ← → step · B/D/C modes · I invert · + − zoom.
 
@@ -42,6 +45,13 @@ Optional – pre-compute the demo targets so they load instantly:
 .venv/bin/python scripts/warm_cache.py 5
 ```
 
+## Keeping up with new SPHEREx data
+
+- Images are found in our own index (`data/index/`). To pick up a new Quick Release or Data Release, run `python scripts/list_s3.py` and then `python scripts/build_index.py`. The listing finds release folders in the bucket by itself (no release name is hard-coded; when a week is in several releases, a Data Release beats a Quick Release and a newer number beats an older one), and the index build only reads the files that are not in the index yet. Without the index file, the tool falls back to the live IRSA TAP query.
+- The page shows how recent the index is ("Searchable SPHEREx images: up to …", from `/api/index`).
+- A finished field is stored in `data/results/` and served from there afterwards. The "Latest image" badge shows the date of the newest SPHEREx image in the stored field.
+- To refresh stored fields after a release, delete `data/results/*.json` and run `scripts/warm_cache.py 5` again. If the processing itself changes, raise `PIPELINE_VERSION` in `backend/pipeline.py` instead; old results are then ignored.
+
 ## How it works
 
 ```
@@ -50,7 +60,7 @@ Browser (vanilla JS, canvas, Plotly)          FastAPI backend (Python)
   stretch, invert, zoom (instant)              /api/spectrum aperture photometry on every image
   WCS (TAN) for overlays & clicks              /api/gaia     ESA Gaia archive (MAST fallback)
   URL state, keyboard                          /api/asteroids JPL sb_ident
-                                               /api/resolve  built-in targets, CDS Sesame
+                                               /api/resolve  built-in targets, SIMBAD (Harvard), CDS Sesame
                                                disk cache of cutouts and results
 ```
 
@@ -68,7 +78,7 @@ Browser (vanilla JS, canvas, Plotly)          FastAPI backend (Python)
 
 **NASA:** SPHEREx DR1 (DOI 10.26131/IRSA678) and QR3 (DOI 10.26131/IRSA662) spectral images via NASA/IPAC IRSA; SPHEREx Explanatory Supplement; IRSA SPHEREx tutorial notebooks; IRSA MOST; JPL Small-Body Identification API; WiseView (inspiration).
 **Space agency partners:** ESA Gaia DR3; Canadian Space Agency NEOSSat tutorial and Canadian Astronomy Data Centre (SSOIS, DSS).
-**Other:** CDS Sesame name resolver; astropy, astroquery, reproject, FastAPI, Plotly.js.
+**Other:** SIMBAD (Harvard mirror) and CDS Sesame name resolvers; astropy, astroquery, reproject, FastAPI, Plotly.js.
 
 ### Acknowledgements
 

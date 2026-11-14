@@ -2,6 +2,9 @@
 List every SPHEREx Level-2 image in the public AWS copy (s3://nasa-irsa-spherex) and save
 one line per exposure (all six detectors share the same exposure id).
 
+Release folders (dr1, qr3, ...) are found in the bucket itself; when a week appears in several
+releases, the best one is kept (see rank). After a new release: run this, then build_index.py.
+
 Written with the assistance of an AI coding assistant (Claude, Anthropic); see README "Use of AI".
 """
 import json, re, sys, urllib.request, urllib.parse, xml.etree.ElementTree as ET
@@ -41,11 +44,34 @@ def keys(prefix):
         tok = r.find("s:NextContinuationToken", NS).text
 
 
+def rank(release):
+    """Data Releases replace Quick Releases, and a newer number replaces an older one:
+    dr2 > dr1 > qr4 > qr3 > qr2. Unknown folder names rank lowest."""
+    m = re.fullmatch(r"(dr|qr)(\d+)", release)
+    return (m.group(1) == "dr", int(m.group(2))) if m else (False, -1)
+
+
+def week_folders():
+    """Every week folder of every release in the bucket, each week taken from its best release.
+    New releases (e.g. qr4, dr2) are picked up without changing this script."""
+    best = {}
+    for top in subdirs(""):
+        rel = top.rstrip("/")
+        for path in subdirs(f"{rel}/level2/"):
+            week = path.rstrip("/").rsplit("/", 1)[-1]
+            if week not in best or rank(rel) > rank(best[week].split("/", 1)[0]):
+                best[week] = path
+    by_rel = {}
+    for path in best.values():
+        by_rel.setdefault(path.split("/", 1)[0], []).append(path)
+    for rel in sorted(by_rel, key=rank, reverse=True):
+        print(f"  {rel}: {len(by_rel[rel])} week folders", flush=True)
+    return sorted(best.values())
+
+
 if __name__ == "__main__":
     OUT.mkdir(parents=True, exist_ok=True)
-    weeks = []
-    for rel in ("dr1/level2/", "qr3/level2/"):
-        weeks += subdirs(rel)
+    weeks = week_folders()
     print(len(weeks), "week folders", flush=True)
     pat = re.compile(r"level2_(?P<obs>.+?)D(?P<det>[1-6])_spx_.*\.fits$")
     files = []
