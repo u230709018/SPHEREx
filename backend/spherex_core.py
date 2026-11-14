@@ -2,11 +2,12 @@
 SPHEREx time-series core.
 
 Pipeline:
-  1. find_images()     IRSA TAP: every SPHEREx spectral image covering a sky position
-                       (DR1 + QR3 + deep fields, no ingestion lag -> new data appears automatically)
+  1. find_images()     our own footprint index (sky_index.py, milliseconds, no network); IRSA TAP
+                       as fallback: every SPHEREx spectral image covering a sky position
   2. group_epochs()    split observations into visits ("epochs")
   3. budget_select()   cap downloads per (epoch, detector) so deep fields stay fast
-  4. fetch_all()       IRSA cutout service (parallel, retried, cached on disk)
+  4. fetch_all()       cutouts read from the public AWS copy (s3_source.py); IRSA cutout service as
+                       fallback (parallel, retried, cached on disk)
   5. load_cutout()     IMAGE - ZODI, mask bad FLAGS bits, quality screening
   6. build_frames()    reproject onto a common north-up grid; one co-add per (epoch, detector)
   7. photometry_at()   aperture photometry at any position -> spectrum + light curve
@@ -36,6 +37,9 @@ from astropy.wcs import WCS, FITSFixedWarning
 from astroquery.ipac.irsa import Irsa
 from reproject import reproject_interp
 from scipy.ndimage import map_coordinates
+
+import s3_source
+import sky_index
 
 warnings.simplefilter("ignore", FITSFixedWarning)
 logging.getLogger("astropy").setLevel(logging.ERROR)
@@ -129,6 +133,14 @@ class Cutout:
 # 1-3. Query, epochs, download budget
 # --------------------------------------------------------------------------- #
 def find_images(ra: float, dec: float) -> list[ImageRecord]:
+    """Our own index first (instant, works when IRSA is down); IRSA TAP if no index is installed."""
+    if sky_index.available():
+        return [ImageRecord(uri="ibe/data/spherex/" + key, mjd=mjd, det=det)
+                for key, mjd, det in sky_index.find(ra, dec)]
+    return find_images_tap(ra, dec)
+
+
+def find_images_tap(ra: float, dec: float) -> list[ImageRecord]:
     query = f"""
         SELECT a.uri, p.time_bounds_lower AS tmjd, p.energy_bandpassname AS band
         FROM spherex.artifact a JOIN spherex.plane p ON a.planeid = p.planeid
@@ -136,14 +148,14 @@ def find_images(ra: float, dec: float) -> list[ImageRecord]:
         ORDER BY p.time_bounds_lower
     """
     last = None
-    for attempt in range(5):  # IRSA occasionally answers 503 under load
+    for attempt in range(3):  # IRSA occasionally answers 503 under load; fail fast, the index is primary
         try:
             table = Irsa.query_tap(query).to_table()
             return [ImageRecord(uri=str(r["uri"]), mjd=float(r["tmjd"]),
                                 det=str(r["band"]).replace("SPHEREx-", "")) for r in table]
         except Exception as err:
             last = err
-            time.sleep(3 * 2 ** attempt)
+            time.sleep(2 * 2 ** attempt)
     raise RuntimeError(f"IRSA TAP query failed: {last}")
 
 
@@ -185,11 +197,34 @@ def cutout_url(rec: ImageRecord, ra: float, dec: float, size_deg: float) -> str:
     return f"{IRSA_BASE}{rec.uri}?center={ra:.6f},{dec:.6f}d&size={size_deg:.5f}"
 
 
+def _parse_spherex_cutout(url: str):
+    """(S3 key, ra, dec, size_deg) for an IRSA SPHEREx cutout URL, else None."""
+    if "/ibe/data/spherex/" not in url or "?center=" not in url:
+        return None
+    try:
+        uri, q = url.split("?", 1)
+        params = dict(p.split("=", 1) for p in q.split("&"))
+        ra, dec = params["center"].rstrip("deg").rstrip("d").split(",")
+        size = float(params["size"].rstrip("deg").rstrip("d"))
+        return s3_source.s3_key(uri), float(ra), float(dec), size
+    except Exception:
+        return None
+
+
 def fetch_cutout(url: str, retries: int = 4) -> Path | None:
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     path = CACHE_DIR / (hashlib.sha1(url.encode()).hexdigest()[:20] + ".fits")
     if path.exists() and path.stat().st_size > 0:
         return path
+    s3 = _parse_spherex_cutout(url)
+    if s3:                      # SPHEREx: read the AWS copy directly, IRSA only if that fails
+        try:
+            return s3_source.cutout(*s3, out=path)
+        except FileNotFoundError:
+            pass
+        except Exception as err:
+            logging.getLogger(__name__).warning("S3 cutout failed (%s), trying IRSA", err)
+        retries = 2
     for attempt in range(retries):
         try:
             with urllib.request.urlopen(url, timeout=120) as resp:
@@ -208,7 +243,7 @@ def fetch_cutout(url: str, retries: int = 4) -> Path | None:
     return None
 
 
-def fetch_all(records, ra, dec, size_deg, workers=8, progress=None) -> dict[str, Path | None]:
+def fetch_all(records, ra, dec, size_deg, workers=24, progress=None) -> dict[str, Path | None]:
     out: dict[str, Path | None] = {}
     urls = [(r.uri, cutout_url(r, ra, dec, size_deg)) for r in records]
     with ThreadPoolExecutor(max_workers=workers) as pool:

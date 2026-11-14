@@ -130,7 +130,7 @@ def run_frames_job(p: dict, progress) -> dict:
     size_deg = p["fov_arcmin"] / 60.0
 
     # Centre the field on the target's position in the middle of the SPHEREx data range.
-    progress("query", 0, 1, "Searching the SPHEREx archive (IRSA)...")
+    progress("query", 0, 1, "Finding SPHEREx images of this position...")
     ra_mid, dec_mid = cat.propagate(p["ra"], p["dec"], p.get("pmra", 0), p.get("pmdec", 0),
                                     p.get("ref_epoch", 2000.0), 2025.9)
     records = sx.find_images(ra_mid, dec_mid)
@@ -186,6 +186,7 @@ def run_frames_job(p: dict, progress) -> dict:
     result = {
         "key": key, "name": p.get("name"), "target": {k: p.get(k) for k in ("ra", "dec", "pmra", "pmdec", "ref_epoch")},
         "fov_arcmin": p["fov_arcmin"],
+        "quality": {"max_per_cell": p.get("max_per_cell", 8), "budget": p.get("budget", 260)},
         "grid": {"crval": [ra_mid, dec_mid], "crpix": list(grid.wcs.crpix), "cdelt": list(grid.wcs.cdelt),
                  "shape": list(shape)},
         "epochs": [e | {"target_ra": t[0], "target_dec": t[1]} for e, t in zip(ep_meta, track)],

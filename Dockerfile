@@ -11,6 +11,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY backend ./backend
 COPY frontend ./frontend
 COPY data/results ./data/results
+COPY data/index/spherex_index.npz data/index/focal_plane.json ./data/index/
 
 # The app writes downloaded cutouts to data/cache at runtime.
 RUN mkdir -p data/cache && chmod -R a+rwX data

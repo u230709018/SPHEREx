@@ -5,3 +5,7 @@ scratch/
 output/
 .DS_Store
 .claude/
+
+# index build intermediates (rebuild with scripts/list_s3.py + scripts/build_index.py)
+data/index/s3_files.json
+data/index/pointing_partial.jsonl

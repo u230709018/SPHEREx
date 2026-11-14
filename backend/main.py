@@ -97,10 +97,13 @@ def resolve(q: str = Query(..., min_length=1)):
 @app.post("/api/frames")
 def frames(req: FramesRequest):
     params = req.model_dump()
-    key = pl.job_key({k: v for k, v in params.items() if k != "name"})
     params_for_key = {k: v for k, v in params.items() if k != "name"}
-    if pl.cached_result(key):
-        return {"status": "done", "result_key": key}
+    key = pl.job_key(params_for_key)
+    # A sharper (more images per visit) result of the same field is always good enough.
+    for mpc, bud in ((8, 260), (params["max_per_cell"], params["budget"])):
+        k = pl.job_key(params_for_key | {"max_per_cell": mpc, "budget": bud})
+        if max(mpc, params["max_per_cell"]) == mpc and pl.cached_result(k):
+            return {"status": "done", "result_key": k}
     job_id = uuid.uuid4().hex[:12]
     with JOBS_LOCK:
         JOBS[job_id] = {"status": "running", "stage": "queued", "done": 0, "total": 1,
@@ -150,6 +153,13 @@ def spectrum(key: str, ra: float, dec: float):
     nbrs = pl.gaia_neighbors(key, res["grid"]["crval"][0], res["grid"]["crval"][1],
                              res["fov_arcmin"], res["epochs"])
     return pl.spectrum_and_lightcurve(cutouts, ra=ra, dec=dec, neighbors_by_epoch=nbrs, method="psf")
+
+
+@app.get("/api/index")
+def index_info():
+    """Status of our own SPHEREx footprint index (how many images, when it was built)."""
+    import sky_index
+    return sky_index.info()
 
 
 @app.get("/api/archival/{key}")

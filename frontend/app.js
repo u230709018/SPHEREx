@@ -394,7 +394,9 @@ function showProgress(on, msg, frac) {
   if (msg) $("progressMsg").textContent = msg;
   if (frac != null) $("progressBar").style.width = `${Math.round(frac * 100)}%`;
 }
-async function loadTarget(t, fov) {
+// First look: 3 images per visit and detector (fast); "Sharper images" fetches up to 8.
+const QUICK = { max_per_cell: 3, budget: 120 }, FULL = { max_per_cell: 8, budget: 260 };
+async function loadTarget(t, fov, quality = QUICK) {
   S.target = t; S.fov = fov; S.gaia = null; S.ast = null; S.spec = null; S.specLabel = null;
   $("ovAst").checked = false; $("candidates").hidden = true;
   $("empty").hidden = true; $("targetName").textContent = t.name || `${sexa(t.ra, true)} ${sexa(t.dec)}`;
@@ -402,7 +404,7 @@ async function loadTarget(t, fov) {
   $("targetInfo").textContent = `${t.kind ? t.kind + " · " : ""}RA ${sexa(t.ra, true)} Dec ${sexa(t.dec)} (epoch ${t.ref_epoch || 2000})${pm > 50 ? ` · moves ${(pm / 1000).toFixed(2)}″/yr` : ""}`;
   setHash();
   const body = { ra: t.ra, dec: t.dec, pmra: t.pmra || 0, pmdec: t.pmdec || 0, ref_epoch: t.ref_epoch || 2000,
-                 fov_arcmin: fov, max_per_cell: 8, budget: 260, name: t.name || null };
+                 fov_arcmin: fov, ...quality, name: t.name || null };
   runJob("/api/frames", body, "Could not load this field.");
 }
 async function loadObject(name, fov) {
@@ -577,6 +579,11 @@ function buildLinks() {
     ["IRSA SPHEREx Data Explorer", "https://irsa.ipac.caltech.edu/applications/spherex/"],
   ];
   $("links").innerHTML = L.map(([t, u]) => `<a href="${u}" target="_blank" rel="noopener">${t} ↗</a>`).join("");
+  const q = S.result.quality;
+  if (q && q.max_per_cell < FULL.max_per_cell && S.result.stats.n_total > S.result.stats.n_downloaded) {
+    $("links").insertAdjacentHTML("afterbegin", `<button id="sharperBtn" class="small" title="The first look uses up to ${q.max_per_cell} images per visit and detector. Load up to ${FULL.max_per_cell} for less noisy frames and a better spectrum (about 1-2 min).">Sharper images (use more of the ${S.result.stats.n_total} available)</button>`);
+    $("sharperBtn").onclick = () => loadTarget(S.target, S.fov, FULL);
+  }
 }
 async function fetchGaia() {
   const r = S.result, rad = (S.fov / 60) * 0.75;
@@ -656,7 +663,7 @@ function measureMotion() {
         const v = img[y * nx + x];
         if (Number.isFinite(v) && v > best) { best = v; bx = x; by = y; }
       }
-    if (!(best > 3)) continue;           // need a >3-sigma detection
+    if (!(best > 5)) continue;           // need a clear (>5-sigma) source: noise peaks in empty sky reach 3-4 sigma
     if (hb > 2) { bx = Math.round(px); by = Math.round(py); }   // wide box centred on the prediction
     let sw = 0, sx = 0, sy = 0;
     for (let y = by - hb; y <= by + hb; y++)
@@ -688,13 +695,13 @@ function showMotionBadge() {
   el.hidden = !m;
   if (!m) return;
   const cat = Math.hypot(S.target.pmra || 0, S.target.pmdec || 0) / 1000;
-  const sig = m.total / m.err;
+  const sig = m.total / m.err, SIG = 5;   // 5 sigma: a 7x7 search box gives noise centroids that fake 3-4 sigma motions
   const who = m.arch ? "Measured (SPHEREx + archival)" : "Measured by SPHEREx";
-  el.className = "badge " + (sig > 3 ? "good" : "");
+  el.className = "badge " + (sig > SIG ? "good" : "");
   el.title = `Centroid fit over ${m.n} visits spanning ${m.span.toFixed(2)} yr${m.arch ? ` (incl. ${m.arch} archival 2MASS/WISE)` : ""}: μα* = ${m.pmra.toFixed(2)}″/yr, μδ = ${m.pmdec.toFixed(2)}″/yr`;
-  el.textContent = sig > 3
+  el.textContent = sig > SIG
     ? `${who}: ${m.total.toFixed(m.err < 0.1 ? 2 : 1)} ± ${m.err.toFixed(m.err < 0.1 ? 2 : 1)}″/yr${cat > 0.05 ? ` (catalogue ${cat.toFixed(1)}″/yr)` : " – moving!"}`
-    : `${who}: no significant motion (< ${(3 * m.err).toFixed(1)}″/yr)`;
+    : `${who}: no significant motion (< ${(SIG * m.err).toFixed(1)}″/yr)`;
 }
 
 // ---------------------------------------------------------------- Aladin sky context

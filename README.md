@@ -46,7 +46,7 @@ Optional – pre-compute the demo targets so they load instantly:
 
 ```
 Browser (vanilla JS, canvas, Plotly)          FastAPI backend (Python)
-  blink / difference / colour rendering  <--   /api/frames   IRSA TAP -> cutouts -> clean -> reproject -> co-add
+  blink / difference / colour rendering  <--   /api/frames   own index -> AWS cutouts -> clean -> reproject -> co-add
   stretch, invert, zoom (instant)              /api/spectrum aperture photometry on every image
   WCS (TAN) for overlays & clicks              /api/gaia     ESA Gaia archive (MAST fallback)
   URL state, keyboard                          /api/asteroids JPL sb_ident
@@ -54,7 +54,9 @@ Browser (vanilla JS, canvas, Plotly)          FastAPI backend (Python)
                                                disk cache of cutouts and results
 ```
 
-- Images: SPHEREx Level-2 spectral images (DR1 + QR3) via the IRSA TAP service (`spherex.artifact`/`spherex.plane`) and the IRSA cutout service.
+- **Finding images – our own index, no database query.** All 1.63 million SPHEREx Level-2 images (273,000 exposures) are indexed by `scripts/build_index.py`, which reads ~9 kB of each 65 MB file in the public AWS copy (`s3://nasa-irsa-spherex`). D1+D4, D2+D5 and D3+D6 see the same sky and D1–D3 sit side by side, so one pointing per exposure plus a fixed focal-plane map describes all six footprints. Each exposure is stored as a 3-D unit vector, so "which images cover this position?" becomes one dot product per exposure (a 3-D search reduced to comparing a single number), followed by a vectorised gnomonic projection of the candidates: a few milliseconds, and it keeps working when the IRSA database is down. The IRSA TAP service (`spherex.artifact`/`spherex.plane`) is the fallback.
+- **Cutouts straight from the cloud.** Level-2 images are uncompressed FITS, so a cutout is a handful of HTTP range requests (headers, the rows that cover the box, the row-compressed FLAGS tiles, one ePSF zone, the spectral WCS). The result is pixel-for-pixel identical to an IRSA cutout; the IRSA cutout service is the fallback.
+- **Fast first look.** New fields load with up to 3 images per visit and detector; a *Sharper images* button fetches up to 8.
 - Cleaning: zodiacal light model (ZODI extension) subtracted; pixels with bad FLAGS bits masked (Explanatory Supplement Table 16); per-image background removed.
 - Alignment: every cutout reprojected onto a common north-up TAN grid (6.15″ pixels) with `reproject`.
 - Co-addition: one inverse-variance–weighted frame per (visit, detector); the browser normalises and combines detectors on the fly.

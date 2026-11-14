@@ -82,10 +82,12 @@ def archival_frames(key: str) -> dict:
     grid, shape = sx.make_grid(ra, dec, size)
     coord = SkyCoord(ra, dec, unit="deg")
     out = {"epochs": [], "frames": []}
+    failed = False
     for coll, label, eid, bands in SURVEYS:
         try:
             tab = Irsa.query_sia(pos=(coord, size / 2 * u.deg), collection=coll)
         except Exception:
+            failed = True          # IRSA unreachable: answer without this survey, but do not cache
             continue
         sci = [r for r in tab if str(r["dataproduct_subtype"]) == "science"]
         dets, mjds = [], []
@@ -111,6 +113,7 @@ def archival_frames(key: str) -> dict:
             "mjd": mjd, "jyear": cat.mjd_to_jyear(mjd),
             "date_start": Time(min(mjds), format="mjd").iso[:10], "date_end": Time(max(mjds), format="mjd").iso[:10],
             "n_images": len(dets), "n_available": len(dets), "dets": sorted(dets)})
-    pl.RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    cache.write_text(json.dumps(out))
+    if not failed:
+        pl.RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+        cache.write_text(json.dumps(out))
     return out
