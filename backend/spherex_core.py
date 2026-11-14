@@ -316,29 +316,35 @@ def b64f32(a: np.ndarray) -> str:
     return base64.b64encode(np.ascontiguousarray(a, dtype="<f4").tobytes()).decode()
 
 
+def reproject_one(c: Cutout, grid: WCS, shape) -> tuple[np.ndarray, float]:
+    """Background-subtracted display image of one cutout on the viewer grid, and its weight."""
+    img = c.display - np.nanmedian(c.display)
+    img_r, _ = reproject_interp((img, c.wcs), grid, shape_out=shape)
+    v = float(np.nanmedian(c.variance))
+    return img_r, (1.0 / v if np.isfinite(v) and v > 0 else 1.0)
+
+
+def combine_cell(items: list[tuple[np.ndarray, float]]) -> np.ndarray:
+    """Co-add of one (epoch, detector): per-pixel median with >= 3 images (rejects cosmic rays and
+    other transients), otherwise a 1/variance-weighted mean."""
+    cube = np.array([a for a, _ in items])
+    if len(items) >= 3:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            out = np.nanmedian(cube, axis=0)
+    else:
+        w = np.array([w for _, w in items])[:, None, None] * np.isfinite(cube)
+        den = w.sum(axis=0)
+        out = np.where(den > 0, np.nansum(np.nan_to_num(cube) * w, axis=0) / np.where(den > 0, den, 1), np.nan)
+    return out.astype(np.float32)
+
+
 def build_frames(cutouts: list[Cutout], grid: WCS, shape) -> dict:
-    """One co-add per (epoch, detector) from the lightly-masked display images.
-    Background (median) removed per image. With >= 3 images the per-pixel median rejects
-    cosmic rays and other transients; otherwise a 1/variance-weighted mean is used."""
+    """One co-add per (epoch, detector) from the lightly-masked display images."""
     stacks: dict[tuple[int, str], list] = {}
     for c in cutouts:
-        img = c.display - np.nanmedian(c.display)
-        img_r, _ = reproject_interp((img, c.wcs), grid, shape_out=shape)
-        v = float(np.nanmedian(c.variance))
-        stacks.setdefault((c.rec.epoch, c.rec.det), []).append((img_r, 1.0 / v if np.isfinite(v) and v > 0 else 1.0))
-    frames = {}
-    for key, items in stacks.items():
-        cube = np.array([a for a, _ in items])
-        if len(items) >= 3:
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore", RuntimeWarning)
-                out = np.nanmedian(cube, axis=0)
-        else:
-            w = np.array([w for _, w in items])[:, None, None] * np.isfinite(cube)
-            den = w.sum(axis=0)
-            out = np.where(den > 0, np.nansum(np.nan_to_num(cube) * w, axis=0) / np.where(den > 0, den, 1), np.nan)
-        frames[key] = (out.astype(np.float32), len(items))
-    return frames
+        stacks.setdefault((c.rec.epoch, c.rec.det), []).append(reproject_one(c, grid, shape))
+    return {key: (combine_cell(items), len(items)) for key, items in stacks.items()}
 
 
 # --------------------------------------------------------------------------- #

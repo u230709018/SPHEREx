@@ -489,9 +489,15 @@ function onResult(res, opt = {}) {
     normaliseFrames();
     buildTimeline(); if (!same) buildDetButtons(); rebuildDisplay();
     showProgress(false); $("empty").hidden = true;
-    S.spec = { points: [], lightcurve: [] };
-    $("specTitle").textContent = "Spectrum (measuring…)"; $("specReset").hidden = true;
-    plotSpectrum(); plotLightcurve(); buildBadges(); buildLinks();
+    if (!same) S.specLabel = { name: "target", ra: null, dec: null };
+    if (S.specLabel && S.specLabel.name === "target") {      // live charts, unless the user is looking elsewhere
+      S.spec = { points: res.points || [], lightcurve: res.lightcurve || [] };
+      const n = S.spec.points.length;
+      $("specTitle").textContent = n ? `Spectrum at target (live: ${n} measurements)` : "Spectrum at target (measuring…)";
+      $("specReset").hidden = true;
+      plotSpectrum(); plotLightcurve();
+    }
+    buildBadges(); buildLinks();
     if (!same) { updateContext(); S.ctxKey = res.key; play(true); }
     return;
   }
@@ -505,10 +511,13 @@ function onResult(res, opt = {}) {
   normaliseFrames();
   buildTimeline(); buildDetButtons(); rebuildDisplay();
   showProgress(false);
-  S.spec = { points: res.points, lightcurve: res.lightcurve };
-  S.specLabel = { name: "target", ra: null, dec: null };
-  $("specTitle").textContent = "Spectrum at target"; $("specReset").hidden = true;
-  plotSpectrum(); plotLightcurve(); buildBadges(); buildWarnings(); buildLinks();
+  if (!same || !S.specLabel || S.specLabel.name === "target") {   // keep a spectrum the user clicked during loading
+    S.spec = { points: res.points, lightcurve: res.lightcurve };
+    S.specLabel = { name: "target", ra: null, dec: null };
+    $("specTitle").textContent = "Spectrum at target"; $("specReset").hidden = true;
+    plotSpectrum(); plotLightcurve();
+  }
+  buildBadges(); buildWarnings(); buildLinks();
   if (!isMoving()) { fetchGaia(); fetchArchival(); }
   if (S.ctxKey !== res.key) updateContext();
   S.ctxKey = res.key;
@@ -902,7 +911,9 @@ function plotLightcurve() {
       hovertemplate: `${d}: %{y:.2f}× median<br>%{x}<extra></extra>` });
   });
   const skipped = DETS.filter((d) => lc.some((r) => r.det === d) && !used.includes(d));
-  Plotly.react("lcPlot", traces, { ...PLOT_LAYOUT, xaxis: { ...PLOT_LAYOUT.xaxis, type: "date" },
+  const ep = S.sph && S.sph.length ? S.sph : S.epochs, pad = 12;
+  const xr = ep.length ? [mjdToDate(Math.min(...ep.map((e) => e.mjd)) - pad), mjdToDate(Math.max(...ep.map((e) => e.mjd)) + pad)] : undefined;
+  Plotly.react("lcPlot", traces, { ...PLOT_LAYOUT, xaxis: { ...PLOT_LAYOUT.xaxis, type: "date", range: xr },
     yaxis: { ...PLOT_LAYOUT.yaxis, title: "Flux / median", type: lcLog() ? "log" : "linear" },
     annotations: skipped.length ? [{ xref: "paper", yref: "paper", x: 1, y: 1.02, xanchor: "right", yanchor: "bottom", showarrow: false,
       text: `not detected in ${skipped.join(", ")}`, font: { size: 10, color: "#8e9bb3" } }] : [] }, { displayModeBar: false, responsive: true });

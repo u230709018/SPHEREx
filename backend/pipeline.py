@@ -94,6 +94,13 @@ def gaia_neighbors(key: str, ra0: float, dec0: float, fov_arcmin: float, ep_meta
 def spectrum_and_lightcurve(cutouts, positions_by_epoch=None, ra=None, dec=None,
                             neighbors_by_epoch=None, method: str = "aperture") -> dict:
     """Photometry at a fixed (ra, dec) or at a moving target position per epoch."""
+    pts = measure_points(cutouts, positions_by_epoch, ra, dec, neighbors_by_epoch, method)
+    return {"points": sorted(pts, key=lambda q: (q["wavelength_um"] or 0)), "lightcurve": light_curve(pts)}
+
+
+def measure_points(cutouts, positions_by_epoch=None, ra=None, dec=None,
+                   neighbors_by_epoch=None, method: str = "aperture") -> list[dict]:
+    """One photometry point per cutout (spectral point at that pixel's wavelength)."""
     pts = []
     for c in cutouts:
         if positions_by_epoch is not None:
@@ -108,8 +115,11 @@ def spectrum_and_lightcurve(cutouts, positions_by_epoch=None, ra=None, dec=None,
         ph = sx.photometry_at(c, r, d, neighbors=nb, method=method)
         if ph is not None:
             pts.append(ph)
-    pts.sort(key=lambda q: (q["wavelength_um"] or 0))
-    # light curve: robust median per (epoch, detector)
+    return pts
+
+
+def light_curve(pts) -> list[dict]:
+    """Robust median flux per (epoch, detector)."""
     lc = []
     cells: dict = {}
     for q in pts:
@@ -121,11 +131,21 @@ def spectrum_and_lightcurve(cutouts, positions_by_epoch=None, ra=None, dec=None,
                    "flux_mjy": float(np.median(f)),
                    "err_mjy": float(1.253 * np.std(f) / np.sqrt(len(f))) if len(f) > 1 else None,
                    "n": len(qs)})
-    return {"points": pts, "lightcurve": lc}
+    return lc
 
 
 PREVIEW_PER_CELL = 1                         # images per (visit, detector) in the first preview
+PUBLISH_EVERY = 4.0                          # seconds between live updates after the preview
 KEY_EXCLUDE = ("name", "priority_dets")      # request fields that do not change the final result
+
+
+def _epoch_meta_from_records(records) -> list[dict]:
+    """Visit dates from the image list alone (before anything is downloaded)."""
+    out = []
+    for ep in sorted({r.epoch for r in records}):
+        m = float(np.mean([r.mjd for r in records if r.epoch == ep]))
+        out.append({"epoch": ep, "mjd": m, "jyear": cat.mjd_to_jyear(m)})
+    return out
 
 
 def _epoch_meta(cutouts, records) -> list[dict]:
@@ -213,11 +233,20 @@ def run_frames_job(p: dict, progress, publish=None) -> dict:
 
     # The preview downloads alone (on a small server the CPU is the bottleneck, so anything running
     # beside it only delays the first frames); the later groups are queued together right after it,
-    # in priority order, and download while earlier groups are processed.
+    # in priority order, and download while earlier groups are processed. Every image is reprojected
+    # once and measured once; frames and the spectrum are re-published every PUBLISH_EVERY seconds.
     cutouts, frames, rejected = [], {}, {"failed": 0, "transient": 0}
     by_cell: dict = {}
+    points: list = []
+    pending_phot: list = []
     n_done = [0]
     done_lock = threading.Lock()
+
+    # Target position and Gaia neighbours per visit are known before any image arrives.
+    ep_rec = _epoch_meta_from_records(records)
+    pos_by_epoch = dict(zip([e["epoch"] for e in ep_rec], target_track(p, [e["mjd"] for e in ep_rec])))
+    side = ThreadPoolExecutor(max_workers=1)
+    gaia_fut = side.submit(gaia_neighbors, key, ra_mid, dec_mid, p["fov_arcmin"], ep_rec)
 
     def fetch(rec):
         path = sx.fetch_cutout(sx.cutout_url(rec, ra_mid, dec_mid, size_deg))
@@ -227,45 +256,66 @@ def run_frames_job(p: dict, progress, publish=None) -> dict:
         progress("download", k, len(chosen), f"Downloading cutouts {k}/{len(chosen)}")
         return path
 
+    def measure(final=False):
+        """Photometry of the images waiting for it (needs the Gaia neighbours; never blocks before the end)."""
+        if not pending_phot or not (final or gaia_fut.done()):
+            return
+        nbrs = gaia_fut.result()
+        points.extend(measure_points(pending_phot, positions_by_epoch=pos_by_epoch,
+                                     neighbors_by_epoch=nbrs, method="psf"))
+        pending_phot.clear()
+
+    def snapshot(label):
+        phot = {"points": sorted(points, key=lambda q: (q["wavelength_um"] or 0)), "lightcurve": light_curve(points)}
+        try:
+            publish(assemble(cutouts, frames, phot=phot, partial=label)[0])
+        except Exception:
+            pass                            # a preview must never break the job
+
     pool = ThreadPoolExecutor(max_workers=24)
     futures = [(groups[0][0], [(rec, pool.submit(fetch, rec)) for rec in groups[0][1]])]
+    last_pub = time.time()
     for gi, (label, items) in enumerate(futures):
-        new = []
-        for rec, fut in items:
+        touched = set()
+        for n_item, (rec, fut) in enumerate(items, 1):
             path = fut.result()
             c = sx.load_cutout(rec, path) if path else None
             if c is None:
                 rejected["failed"] += 1
-            elif c.n_transient > sx.MAX_TRANSIENT_PIXELS:
+                continue
+            if c.n_transient > sx.MAX_TRANSIENT_PIXELS:
                 rejected["transient"] += 1
-            else:
-                new.append(c)
-        cutouts += new
-        touched = set()
-        for c in new:
-            by_cell.setdefault((c.rec.epoch, c.rec.det), []).append(c)
+                continue
+            cutouts.append(c)
+            by_cell.setdefault((c.rec.epoch, c.rec.det), []).append(sx.reproject_one(c, grid, shape))
             touched.add((c.rec.epoch, c.rec.det))
-        if touched:                       # rebuild only the frames that got new images
-            frames.update(sx.build_frames([c for k in touched for c in by_cell[k]], grid, shape))
-        if publish and label != "final" and frames:
-            try:
-                publish(assemble(cutouts, frames, partial=label)[0])
-            except Exception:
-                pass                        # a preview must never break the job
+            pending_phot.append(c)
+            # in the later groups, publish every few seconds so frames and charts fill in live
+            if publish and gi > 0 and time.time() - last_pub > PUBLISH_EVERY and n_item < len(items):
+                for cell in touched:
+                    frames[cell] = (sx.combine_cell(by_cell[cell]), len(by_cell[cell]))
+                touched.clear()
+                measure()
+                snapshot(label)
+                last_pub = time.time()
+        for cell in touched:
+            frames[cell] = (sx.combine_cell(by_cell[cell]), len(by_cell[cell]))
+        if gi > 0:
+            measure()
+        if publish and frames and gi < len(groups) - 1:   # the final result follows the last group anyway
+            snapshot(label)
+            last_pub = time.time()
         if gi == 0:                       # preview on screen: queue everything else now
             futures += [(lb, [(rec, pool.submit(fetch, rec)) for rec in grp]) for lb, grp in groups[1:]]
     pool.shutdown(wait=False)
+    side.shutdown(wait=False)
     if not cutouts:
         raise RuntimeError("All cutouts failed to download; the archive may be overloaded. Try again shortly.")
     _remember(key, cutouts)
 
     progress("process", 1, 1, "Measuring the spectrum and light curve (PSF fit, Gaia-deblended)...")
-    ep_meta = _epoch_meta(cutouts, records)
-    track = target_track(p, [e["mjd"] for e in ep_meta])
-    pos_by_epoch = {e["epoch"]: t for e, t in zip(ep_meta, track)}
-    nbrs = gaia_neighbors(key, ra_mid, dec_mid, p["fov_arcmin"], ep_meta)
-    phot = spectrum_and_lightcurve(cutouts, positions_by_epoch=pos_by_epoch,
-                                   neighbors_by_epoch=nbrs, method="psf")
+    measure(final=True)
+    phot = {"points": sorted(points, key=lambda q: (q["wavelength_um"] or 0)), "lightcurve": light_curve(points)}
     result = assemble(cutouts, frames, phot=phot)[0]
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     (RESULTS_DIR / f"{key}.json").write_text(json.dumps(result))
