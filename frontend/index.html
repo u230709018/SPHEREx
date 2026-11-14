@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>SPHEREx Time Machine</title>
+  <title>SkyBlink</title>
   <meta name="description" content="Blink NASA SPHEREx infrared images of any patch of sky to find moving and variable objects, with on-the-fly 0.75-5 micron spectra.">
   <link rel="stylesheet" href="style.css">
   <script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.35.2/plotly.min.js" defer></script>
@@ -12,13 +12,46 @@
     window.A = A;
   </script>
   <script src="app.js" defer></script>
+  <link rel="stylesheet" href="skyblink.css">
+  <script type="module" src="skyblink.js"></script>
 </head>
 <body>
+<section class="landing" id="skyblink-opening" aria-labelledby="landing-title">
+<div class="landing-menu">
+<svg class="opening-mark" viewBox="0 0 240 150" aria-hidden="true" focusable="false">
+  <defs>
+    <path id="opening-curve" d="M40 117 C102 117 166 105 192 48"/>
+    <path id="opening-star" d="M0 -28 Q4 -4 28 0 Q4 4 0 28 Q-4 4 -28 0 Q-4 -4 0 -28Z"/>
+  </defs>
+  <path d="M40 117 C102 117 166 105 192 48" fill="none" stroke="#b997ff" stroke-width="3.4" stroke-linecap="round" pathLength="1" stroke-dasharray="1">
+    <animate class="opening-animate" attributeName="stroke-dashoffset" from="1" to="0" dur="1.9s" begin="indefinite" fill="freeze" calcMode="spline" keyTimes="0;1" keySplines=".36 0 .24 1"/>
+  </path>
+  <g class="opening-stars">
+    <use href="#opening-star" transform="translate(40 117) scale(.48)" fill="#bc9bff"/>
+    <use href="#opening-star" transform="translate(192 48) scale(1.36)" fill="#f2eaff">
+      <animate class="opening-arrival" attributeName="opacity" values="0;0;1" keyTimes="0;.87;1" dur="2.15s" begin="indefinite" fill="freeze"/>
+    </use>
+    <g class="opening-motion" opacity="0">
+      <use href="#opening-star" transform="scale(.47)" fill="#eadbff"/>
+      <animate class="opening-animate" attributeName="opacity" values="0;1;1;0" keyTimes="0;.09;.87;1" dur="1.9s" begin="indefinite" fill="freeze"/>
+      <animateMotion class="opening-animate" dur="1.9s" begin="indefinite" fill="freeze" calcMode="spline" keyTimes="0;1" keyPoints="0;1" keySplines=".36 0 .24 1"><mpath href="#opening-curve"/></animateMotion>
+    </g>
+  </g>
+</svg>
+<h1 id="landing-title">SkyBlink</h1>
+<button class="launch" id="skyblink-explore" type="button">Keşfet <span aria-hidden="true">↗</span></button>
+</div>
+</section>
+<div id="team-view">
 <header class="topbar">
   <div class="brand">
-    <span class="logo" aria-hidden="true">◐</span>
+    <svg class="skyblink-brand" viewBox="0 0 240 150" width="46" height="32" aria-hidden="true" focusable="false">
+      <use href="#opening-curve" fill="none" stroke="#b997ff" stroke-width="7" stroke-linecap="round"/>
+      <use href="#opening-star" transform="translate(40 117) scale(.48)" fill="#bc9bff"/>
+      <use href="#opening-star" transform="translate(192 48) scale(1.36)" fill="#f2eaff"/>
+    </svg>
     <div>
-      <h1>SPHEREx Time Machine</h1>
+      <h1>SkyBlink</h1>
       <p class="tagline">Blink the infrared sky. Spot what moves. Read its spectrum.</p>
     </div>
   </div>
@@ -35,11 +68,6 @@
         <option value="8">8′</option>
         <option value="12">12′</option>
       </select>
-    </label>
-    <label class="dates" title="Optional: only use visits between these dates (empty = all). SPHEREx observes from April 2025; ranges reaching back to 2010 or 2000 add the archival WISE and 2MASS frames.">Dates
-      <input id="dFrom" type="date" min="1997-01-01" aria-label="From date">
-      <span aria-hidden="true">–</span>
-      <input id="dTo" type="date" min="1997-01-01" aria-label="To date">
     </label>
     <button type="submit" class="primary">Load</button>
   </form>
@@ -62,7 +90,6 @@
       <canvas id="overlay" width="560" height="560"></canvas>
       <div class="epoch-label" id="epochLabel"></div>
       <div class="readout" id="readout"></div>
-      <div class="live-status" id="liveStatus" hidden><span class="dot"></span><span id="liveStatusText"></span></div>
       <div class="progress" id="progress" hidden>
         <div class="spinner"></div>
         <p id="progressMsg">Loading…</p>
@@ -76,7 +103,6 @@
     </div>
 
     <div class="timeline" id="timeline" aria-label="Epochs"></div>
-    <p class="small range-note" id="rangeNote" hidden></p>
     <p class="muted small time-note">SPHEREx began its survey in May 2025, so its own visits span 2025–2026 (new data arrive weekly). To stretch the time baseline to ~25 years, archival 2MASS (~2000) and WISE (2010) images of the same field are added as extra frames; see also the 1950s–1990s plates in “Sky context &amp; long-term motion” below.</p>
 
     <div class="controls">
@@ -172,5 +198,6 @@
   <p>This research has made use of the NASA/IPAC Infrared Science Archive, ESA Gaia DR3 (Gaia Collaboration 2023), the JPL Small-Body Identification API, CDS Sesame, and the Canadian Astronomy Data Centre (operated by the National Research Council of Canada with the support of the Canadian Space Agency). Built for the NASA Space Apps Challenge 2026. Not an official NASA product.</p>
   <p class="muted">Keyboard: Space play/pause · ← → step · B blink · D difference · C colour · I invert · + − zoom</p>
 </footer>
+</div>
 </body>
 </html>
