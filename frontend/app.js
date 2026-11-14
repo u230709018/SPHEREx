@@ -694,7 +694,9 @@ async function updateContext() {
     return;
   }
   al.gotoRaDec(c[0], c[1]);
-  al.setFoV((S.fov / 60) * 1.8);
+  // setFoV is the horizontal field: widen it on wide panels so the whole SPHEREx square stays visible
+  const box = $("aladin"), aspect = Math.max(1, box.clientWidth / Math.max(1, box.clientHeight));
+  al.setFoV((S.fov / 60) * 1.5 * aspect);
   const fp = A.graphicOverlay({ color: "#4fb3ff", lineWidth: 2, name: "SPHEREx field" });
   al.addOverlay(fp);
   const corners = [[-0.5, -0.5], [nx - 0.5, -0.5], [nx - 0.5, ny - 0.5], [-0.5, ny - 0.5]].map(([x, y]) => pix2world(x, y));
@@ -715,7 +717,7 @@ async function updateContext() {
     marks.addSources(stops.map(([y, label]) => { const [ra, dec] = propagateJs(t, y); return A.source(ra, dec, { label }); }));
     const moved = (pm / 1000) * (e1.jyear - 1953) / 60;
     $("contextNote").textContent = `Orange track: ${t.name || "target"} moved ${moved.toFixed(1)}′ since the 1953 Palomar plates (${(pm / 1000).toFixed(2)}″/yr). Switch the background to compare decades. Blue square: the SPHEREx field above. Powered by Aladin Lite (CDS).`;
-    if (moved * 60 > S.fov * 60 * 0.6) al.setFoV(Math.max((S.fov / 60) * 1.8, (moved / 60) * 1.4));
+    if (moved * 60 > S.fov * 60 * 0.6) al.setFoV(Math.max((S.fov / 60) * 1.5, (moved / 60) * 1.4) * aspect);
   } else {
     $("contextNote").textContent = "Blue square: the SPHEREx field shown above. Use the background menu to compare with other surveys. Powered by Aladin Lite (CDS).";
   }

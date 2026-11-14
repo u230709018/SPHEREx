@@ -26,6 +26,15 @@ import spherex_core as sx
 
 app = FastAPI(title="SPHEREx Time Machine API")
 app.add_middleware(GZipMiddleware, minimum_size=2000)
+
+
+@app.middleware("http")
+async def revalidate_static(request, call_next):
+    """Make browsers revalidate the page, script and styles so new deploys show up immediately."""
+    resp = await call_next(request)
+    if not request.url.path.startswith("/api/"):
+        resp.headers["Cache-Control"] = "no-cache"
+    return resp
 FRONTEND = sx.ROOT / "frontend"
 
 JOBS: dict[str, dict] = {}
