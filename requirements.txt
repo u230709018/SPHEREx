@@ -1,0 +1,6 @@
+astropy
+astroquery
+numpy
+reproject
+fastapi
+uvicorn
