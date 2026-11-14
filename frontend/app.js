@@ -87,7 +87,7 @@ function pix2world(x, y) {
 // ---------------------------------------------------------------- frames
 function normaliseFrames() {
   S.z.clear();
-  for (const f of S.result.frames) {
+  for (const f of [...S.result.frames, ...(S.arch ? S.arch.frames : [])]) {
     const a = decodeF32(f.data);
     const fin = Array.from(a).filter(Number.isFinite).sort((p, q) => p - q);
     const med = percentile(fin, 50);
@@ -100,6 +100,9 @@ function normaliseFrames() {
 function composite(ep, dets) {
   const [ny, nx] = S.result.grid.shape, out = new Float32Array(nx * ny), cnt = new Uint8Array(nx * ny);
   let any = false;
+  // Archival epochs (2MASS/WISE, ids < 0) have only two bands: if none of the selected
+  // detectors is covered, show their closest available band instead of an empty frame.
+  if (ep < 0 && !dets.some((d) => S.z.has(`${ep}|${d}`))) dets = DETS;
   for (const d of dets) {
     const z = S.z.get(`${ep}|${d}`);
     if (!z) continue;
@@ -110,7 +113,7 @@ function composite(ep, dets) {
   return any ? out : null;
 }
 function medianOthers(arrs, skip) {
-  const n = arrs[0].length, out = new Float32Array(n), tmp = [];
+  const n = arrs.find(Boolean).length, out = new Float32Array(n), tmp = [];
   for (let i = 0; i < n; i++) {
     tmp.length = 0;
     arrs.forEach((a, k) => { if (k !== skip && a && Number.isFinite(a[i])) tmp.push(a[i]); });
@@ -119,8 +122,15 @@ function medianOthers(arrs, skip) {
   }
   return out;
 }
+function useArchival() {
+  return Boolean(S.arch && S.arch.epochs.length && $("ovArch").checked && (S.mode === "blink" || S.mode === "diff") && !isMoving());
+}
 function rebuildDisplay() {
   if (!S.result) return;
+  const curId = S.epochs[S.cur]?.epoch;
+  S.epochs = useArchival() ? [...S.arch.epochs, ...S.sph] : S.sph;
+  S.cur = Math.max(0, S.epochs.findIndex((e) => e.epoch === curId));
+  buildTimeline();
   const eps = S.epochs.map((e) => e.epoch);
   const dets = [...S.dets];
   if (S.mode === "color") {
@@ -137,13 +147,14 @@ function rebuildDisplay() {
   } else {
     const base = eps.map((ep) => composite(ep, dets));
     if (S.mode === "stack") {
-      const valid = base.filter(Boolean);
+      const valid = base.filter((a, i) => a && !S.epochs[i].archival);
       const st = valid.length ? medianOthers(valid, -1) : null;
       S.display = base.map(() => [st]);
     } else if (S.mode === "diff") {
       S.display = base.map((a, k) => {
         if (!a) return [null];
-        const m = medianOthers(base, k), o = new Float32Array(a.length);
+        // reference = median of the *SPHEREx* visits only (never mix instruments in the template)
+        const m = medianOthers(base.map((b, i) => (S.epochs[i].archival ? null : b)), k), o = new Float32Array(a.length);
         for (let i = 0; i < a.length; i++) o[i] = a[i] - m[i];
         return [o];
       });
@@ -161,7 +172,7 @@ function findCandidates() {
   S.cands = [];
   if (!S.result || isMoving() || S.epochs.length < 2) return;
   const [ny, nx] = S.result.grid.shape, dets = [...S.dets];
-  const base = S.epochs.map((e) => composite(e.epoch, dets));
+  const base = S.epochs.map((e) => (e.archival ? null : composite(e.epoch, dets)));   // SPHEREx visits only
   if (base.filter(Boolean).length < 2) return;
   const diffs = base.map((a, k) => {
     if (!a) return null;
@@ -281,7 +292,8 @@ function render() {
       ? `Stack of ${S.epochs.length} frames (shift-and-add on the object)`
       : `${e.date_start} UT · ${e.dets[0]} · ${e.geo_au != null ? e.geo_au.toFixed(2) + " au from Earth" : ""}${e.vmag != null ? " · V≈" + e.vmag.toFixed(1) : ""}`;
   } else {
-    $("epochLabel").textContent = S.mode === "stack" ? `Stack of all ${S.epochs.length} visits`
+    $("epochLabel").textContent = e.archival ? `${e.label} · ${e.date_start.slice(0, 4)} · ${archBands(e)} (archival${S.mode === "diff" ? ", minus SPHEREx median" : ""})`
+      : S.mode === "stack" ? `Stack of all ${S.epochs.length} visits`
       : `${e.date_start}${e.date_end !== e.date_start ? " → " + e.date_end.slice(5) : ""} · ${e.n_images} images · ${S.mode === "color" ? "colour" : S.mode === "cdiff" ? "D5+D6 − D4" : [...S.dets].join("+")}${S.mode === "diff" ? " − median" : ""}`;
   }
   document.querySelectorAll(".timeline button").forEach((b, i) => b.classList.toggle("cur", i === S.cur));
@@ -328,21 +340,21 @@ function drawOverlay() {
   }
   if ($("ovGaia").checked && S.gaia) {
     for (const s of S.gaia.sources) {
-      const p = s.positions[S.cur];
+      const p = gaiaPos(s, S.epochs[S.cur]);
       const fast = s.pm_total && s.pm_total > 150;
       if (!p || (!fast && s.g != null && s.g > 18)) continue;   // declutter: SPHEREx single visits reach ~G 18
       const [x, y] = toCanvas(...world2pix(p[0], p[1]));
       ctx.strokeStyle = fast ? "#ff6bd6" : "rgba(57,217,138,.7)"; ctx.lineWidth = fast ? 2 : 1;
       ctx.beginPath(); ctx.arc(x, y, fast ? Math.max(6, px * 1.6) : Math.max(2.5, px * 0.55), 0, 2 * Math.PI); ctx.stroke();
       if (fast) { // arrow = motion over 5 years
-        const q = s.positions[S.cur], ddeg = (s.pmdec * 5) / 3.6e6, rdeg = (s.pmra * 5) / 3.6e6 / Math.cos(q[1] * D2R);
+        const q = p, ddeg = (s.pmdec * 5) / 3.6e6, rdeg = (s.pmra * 5) / 3.6e6 / Math.cos(q[1] * D2R);
         const [x2, y2] = toCanvas(...world2pix(q[0] + rdeg, q[1] + ddeg));
         ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x2, y2); ctx.stroke();
       }
     }
   }
   if ($("ovAst").checked && S.ast) {
-    const list = S.ast[S.cur]?.objects || [];
+    const list = S.ast[S.sphIdx.get(S.epochs[S.cur].epoch)]?.objects || [];
     ctx.font = "12px system-ui"; ctx.fillStyle = "#ffd25a"; ctx.strokeStyle = "#ffd25a"; ctx.lineWidth = 1.5;
     for (const o of list) {
       const [x, y] = toCanvas(...world2pix(o.ra, o.dec)), r = Math.max(6, px * 1.3);
@@ -436,7 +448,8 @@ async function runJob(path, body, failMsg) {
 }
 const isMoving = () => S.result && S.result.mode === "moving";
 function onResult(res) {
-  S.result = res; S.key = res.key; S.epochs = res.epochs; S.cur = 0;
+  S.result = res; S.key = res.key; S.epochs = S.sph = res.epochs; S.cur = 0; S.arch = null;
+  S.sphIdx = new Map(res.epochs.map((e, i) => [e.epoch, i]));
   if (res.mode === "moving") {
     S.dets = new Set(DETS);                 // each frame is a single detector image
     if (S.mode === "diff" || S.mode === "cdiff") S.mode = "blink";
@@ -451,7 +464,7 @@ function onResult(res) {
   S.specLabel = { name: "target", ra: null, dec: null };
   $("specTitle").textContent = "Spectrum at target"; $("specReset").hidden = true;
   plotSpectrum(); plotLightcurve(); buildBadges(); buildWarnings(); buildLinks();
-  if (!isMoving()) fetchGaia();
+  if (!isMoving()) { fetchGaia(); fetchArchival(); }
   updateContext();
   play(true);
 }
@@ -459,8 +472,10 @@ function buildTimeline() {
   const tl = $("timeline"); tl.innerHTML = "";
   S.epochs.forEach((e, i) => {
     const b = document.createElement("button");
-    b.innerHTML = `${e.date_start}<span class="n">${e.n_images}</span>`;
-    b.title = `${e.date_start} → ${e.date_end}: ${e.n_images} of ${e.n_available} images used (${e.dets.join(" ")})`;
+    b.innerHTML = e.archival ? `${e.label} ${e.date_start.slice(0, 4)}` : `${e.date_start}<span class="n">${e.n_images}</span>`;
+    b.title = e.archival ? `${e.label} archival image (${e.bands}), observed ${e.date_start}${e.date_end !== e.date_start ? " → " + e.date_end : ""}. Different telescope: compare positions, not brightness.`
+      : `${e.date_start} → ${e.date_end}: ${e.n_images} of ${e.n_available} images used (${e.dets.join(" ")})`;
+    if (e.archival) b.classList.add("arch");
     b.onclick = () => { play(false); S.cur = i; render(); };
     tl.appendChild(b);
   });
@@ -494,16 +509,24 @@ function buildBadges() {
     $("badges").innerHTML = b.join("");
     return;
   }
-  const span = S.epochs.length > 1 ? (S.epochs.at(-1).mjd - S.epochs[0].mjd) / 365.25 : 0;
-  b.push(`<span class="badge info">${r.stats.n_used} images · ${S.epochs.length} visits · ${span.toFixed(1)} yr</span>`);
+  const span = S.sph.length > 1 ? (S.sph.at(-1).mjd - S.sph[0].mjd) / 365.25 : 0;
+  b.push(`<span class="badge info">${r.stats.n_used} images · ${S.sph.length} visits · ${span.toFixed(1)} yr</span>`);
   if (r.stats.n_total > r.stats.n_downloaded)
     b.push(`<span class="badge" title="To stay fast, up to 8 images per visit and detector are used">${r.stats.n_total} images in archive${r.stats.n_total > 1000 ? " (deep field)" : ""}</span>`);
   const pm = Math.hypot(S.target.pmra || 0, S.target.pmdec || 0);
   if (pm > 500) b.push(`<span class="badge warn">High proper motion: ${(pm / 1000).toFixed(1)}″/yr → ${(pm / 1000 * span / 6.15).toFixed(1)} px over the data</span>`);
   b.push(`<span class="badge" id="gaiaBadge">Gaia: checking…</span>`);
+  b.push(`<span class="badge info" id="archBadge" hidden title="Archival 2MASS and WISE images from NASA/IPAC IRSA are blinked together with the SPHEREx visits"></span>`);
   b.push(`<span class="badge" id="pmBadge"></span>`);
   $("badges").innerHTML = b.join("");
+  showArchBadge();
   showMotionBadge();
+}
+function showArchBadge() {
+  const el = $("archBadge"), ok = Boolean(S.arch && S.arch.epochs.length);
+  if (!el) return;
+  el.hidden = !ok;
+  if (ok) el.textContent = `+ ${S.arch.epochs.map((e) => `${e.label} ${e.date_start.slice(0, 4)}`).join(" + ")}: ${(S.sph.at(-1).jyear - S.arch.epochs[0].jyear).toFixed(0)}-year baseline`;
 }
 function buildWarnings() {
   const items = [], pts = S.spec.points;
@@ -558,13 +581,13 @@ function buildLinks() {
 async function fetchGaia() {
   const r = S.result, rad = (S.fov / 60) * 0.75;
   try {
-    S.gaia = await api(`/api/gaia?ra=${r.grid.crval[0]}&dec=${r.grid.crval[1]}&radius_deg=${rad.toFixed(4)}&jyears=${S.epochs.map((e) => e.jyear.toFixed(3)).join(",")}`);
+    S.gaia = await api(`/api/gaia?ra=${r.grid.crval[0]}&dec=${r.grid.crval[1]}&radius_deg=${rad.toFixed(4)}&jyears=${S.sph.map((e) => e.jyear.toFixed(3)).join(",")}`);
   } catch { S.gaia = null; }
   const el = $("gaiaBadge");
   if (!el) return;
   if (!S.gaia || !S.gaia.provider) { el.textContent = "Gaia: unavailable"; return; }
   // Does any Gaia source sit on the target at the first epoch?
-  const e0 = S.epochs[0], cosd = Math.cos(e0.target_dec * D2R);
+  const e0 = S.sph[0], cosd = Math.cos(e0.target_dec * D2R);
   const match = S.gaia.sources.find((s) => {
     const p = s.positions[0];
     return Math.hypot((p[0] - e0.target_ra) * cosd, p[1] - e0.target_dec) * 3600 < 4;
@@ -578,11 +601,32 @@ async function fetchGaia() {
   }
   drawOverlay();
 }
+function archBands(e) {   // the archival bands actually on screen for the selected detectors
+  const fr = S.arch.frames.filter((f) => f.epoch === e.epoch);
+  const sel = fr.filter((f) => S.dets.has(f.det));
+  return (sel.length ? sel : fr).map((f) => (f.band === "K" ? "Ks" : f.band)).join("+");
+}
+function gaiaPos(s, e) {   // Gaia position at a visit; archival epochs are propagated with the Gaia proper motion
+  if (!e.archival) return s.positions[S.sphIdx.get(e.epoch)];
+  const p0 = s.positions[0], dt = e.jyear - S.sph[0].jyear;
+  if (s.pmra == null || s.pmdec == null) return p0;
+  return [p0[0] + (s.pmra * dt) / 3.6e6 / Math.cos(p0[1] * D2R), p0[1] + (s.pmdec * dt) / 3.6e6];
+}
+async function fetchArchival() {
+  const key = S.key;
+  let r = null;
+  try { r = await api(`/api/archival/${key}`); } catch { return; }
+  if (S.key !== key || !r || !r.epochs.length) return;
+  r.epochs.sort((a, b) => a.mjd - b.mjd);
+  r.epochs.forEach((e) => { [e.target_ra, e.target_dec] = propagateJs(S.target, e.jyear); });
+  S.arch = r;
+  normaliseFrames(); rebuildDisplay(); showArchBadge(); showMotionBadge();
+}
 async function fetchAsteroids() {
   const r = S.result;
   $("ovAst").disabled = true;
   try {
-    S.ast = await api(`/api/asteroids?ra=${r.grid.crval[0]}&dec=${r.grid.crval[1]}&half_width_deg=${(S.fov / 120).toFixed(4)}&mjds=${S.epochs.map((e) => e.mjd.toFixed(4)).join(",")}`);
+    S.ast = await api(`/api/asteroids?ra=${r.grid.crval[0]}&dec=${r.grid.crval[1]}&half_width_deg=${(S.fov / 120).toFixed(4)}&mjds=${S.sph.map((e) => e.mjd.toFixed(4)).join(",")}`);
   } catch { S.ast = null; }
   $("ovAst").disabled = false;
   drawOverlay();
@@ -600,12 +644,14 @@ function measureMotion() {
   const satFrac = S.result.points.length ? S.result.points.filter((p) => p.saturated).length / S.result.points.length : 0;
   const hb = satFrac > 0.3 ? 4 : 2;
   for (const e of S.epochs) {
+    if (e.archival && !dets.some((d) => S.z.has(`${e.epoch}|${d}`))) continue;   // same wavelength range only
     const img = composite(e.epoch, dets);
     if (!img) continue;
     const [px, py] = world2pix(e.target_ra, e.target_dec);
     let best = -Infinity, bx = 0, by = 0;
-    for (let y = Math.round(py) - 3; y <= Math.round(py) + 3; y++)
-      for (let x = Math.round(px) - 3; x <= Math.round(px) + 3; x++) {
+    const sr = e.archival ? 1 : 3;   // archival frames: stay on the prediction, a brighter neighbour may be close
+    for (let y = Math.round(py) - sr; y <= Math.round(py) + sr; y++)
+      for (let x = Math.round(px) - sr; x <= Math.round(px) + sr; x++) {
         if (x < 2 || y < 2 || x >= nx - 2 || y >= ny - 2) continue;
         const v = img[y * nx + x];
         if (Number.isFinite(v) && v > best) { best = v; bx = x; by = y; }
@@ -619,7 +665,7 @@ function measureMotion() {
         const v = img[y * nx + x];
         if (Number.isFinite(v) && v > 0) { sw += v; sx += v * x; sy += v * y; }
       }
-    if (sw > 0) pts.push({ t: e.jyear, x: sx / sw, y: sy / sw });
+    if (sw > 0) pts.push({ t: e.jyear, x: sx / sw, y: sy / sw, arch: Boolean(e.archival) });
   }
   if (pts.length < 3) return null;
   const fit = (key) => {
@@ -633,20 +679,22 @@ function measureMotion() {
   // grid x grows westward (cdelt1 < 0): +x = -RA direction
   const pmra = -fx.slope * pix, pmdec = fy.slope * pix;
   const err = Math.hypot(fx.err, fy.err) * pix / Math.SQRT2;
-  return { pmra, pmdec, total: Math.hypot(pmra, pmdec), err: Math.max(err, 0.3 / (S.epochs.at(-1).jyear - S.epochs[0].jyear)),
-           n: pts.length, span: pts.at(-1).t - pts[0].t };
+  return { pmra, pmdec, total: Math.hypot(pmra, pmdec), err: Math.max(err, 0.3 / Math.max(0.1, pts.at(-1).t - pts[0].t)),
+           n: pts.length, span: pts.at(-1).t - pts[0].t, arch: pts.filter((p) => p.arch).length };
 }
 function showMotionBadge() {
   const m = measureMotion(), el = $("pmBadge");
   if (!el) return;
-  if (!m) { el.remove(); return; }
+  el.hidden = !m;
+  if (!m) return;
   const cat = Math.hypot(S.target.pmra || 0, S.target.pmdec || 0) / 1000;
   const sig = m.total / m.err;
+  const who = m.arch ? "Measured (SPHEREx + archival)" : "Measured by SPHEREx";
   el.className = "badge " + (sig > 3 ? "good" : "");
-  el.title = `Centroid fit over ${m.n} visits spanning ${m.span.toFixed(2)} yr: μα* = ${m.pmra.toFixed(2)}″/yr, μδ = ${m.pmdec.toFixed(2)}″/yr`;
+  el.title = `Centroid fit over ${m.n} visits spanning ${m.span.toFixed(2)} yr${m.arch ? ` (incl. ${m.arch} archival 2MASS/WISE)` : ""}: μα* = ${m.pmra.toFixed(2)}″/yr, μδ = ${m.pmdec.toFixed(2)}″/yr`;
   el.textContent = sig > 3
-    ? `Measured by SPHEREx: ${m.total.toFixed(1)} ± ${m.err.toFixed(1)}″/yr${cat > 0.05 ? ` (catalogue ${cat.toFixed(1)}″/yr)` : " – moving!"}`
-    : `Measured by SPHEREx: no significant motion (< ${(3 * m.err).toFixed(1)}″/yr)`;
+    ? `${who}: ${m.total.toFixed(m.err < 0.1 ? 2 : 1)} ± ${m.err.toFixed(m.err < 0.1 ? 2 : 1)}″/yr${cat > 0.05 ? ` (catalogue ${cat.toFixed(1)}″/yr)` : " – moving!"}`
+    : `${who}: no significant motion (< ${(3 * m.err).toFixed(1)}″/yr)`;
 }
 
 // ---------------------------------------------------------------- Aladin sky context
@@ -730,7 +778,7 @@ async function updateContext() {
     const marks = A.catalog({ name: "Epochs", sourceSize: 12, shape: "circle", color: "#ffb547",
       displayLabel: true, labelColumn: "label", labelColor: "#ffd28a", labelFont: "12px sans-serif" });
     al.addCatalog(marks);
-    const e0 = S.epochs[0], e1 = S.epochs.at(-1);
+    const e0 = S.sph[0], e1 = S.sph.at(-1);
     const stops = [[1953, "1953 POSS-I"], [1993, "1993 DSS2"], [2016, "2016 Gaia"],
                    [e1.jyear, `${e0.date_start.slice(0, 4)}–${e1.date_start.slice(0, 4)} SPHEREx`]];
     marks.addSources(stops.map(([y, label]) => { const [ra, dec] = propagateJs(t, y); return A.source(ra, dec, { label }); }));
@@ -908,6 +956,7 @@ async function main() {
   $("zoom").oninput = () => { render(); setHash(); };
   $("speed").oninput = () => setHash();
   ["ovTarget", "ovGaia", "ovBorder", "ovCand"].forEach((id) => ($(id).onchange = drawOverlay));
+  $("ovArch").onchange = () => { rebuildDisplay(); showMotionBadge(); };
   $("pickLoad").onclick = () => {
     if (!S.pick) return;
     $("qmode").value = "sky";

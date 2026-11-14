@@ -152,6 +152,15 @@ def spectrum(key: str, ra: float, dec: float):
     return pl.spectrum_and_lightcurve(cutouts, ra=ra, dec=dec, neighbors_by_epoch=nbrs, method="psf")
 
 
+@app.get("/api/archival/{key}")
+def archival(key: str):
+    """2MASS (~2000) and AllWISE (2010) frames of an already loaded field, on the same grid."""
+    import archival as ar
+    if not pl.cached_result(key):
+        raise HTTPException(404, "Field not loaded")
+    return ar.archival_frames(key)
+
+
 @app.get("/api/gaia")
 def gaia(ra: float, dec: float, radius_deg: float = Query(..., gt=0, le=0.3),
          jyears: str = Query(...)):

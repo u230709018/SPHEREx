@@ -98,6 +98,7 @@ h1 { font-size: 20px; margin: 0; letter-spacing: .2px; }
 
 .timeline { display: flex; gap: 6px; margin: 10px 0 4px; overflow-x: auto; padding-bottom: 4px; }
 .timeline button { flex: 0 0 auto; font-size: 12px; padding: 4px 8px; font-variant-numeric: tabular-nums; }
+.timeline button.arch { border-style: dashed; color: #c9a35e; }
 .timeline button.cur { border-color: var(--accent-2); color: var(--accent-2); }
 .timeline button .n { color: var(--muted); margin-left: 4px; }
 
