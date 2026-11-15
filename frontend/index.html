@@ -93,6 +93,14 @@
         <button data-mode="color" class="mode" title="False colour: blue=D1+D2, green=D3+D4, red=D5+D6 (C)">Colour</button>
         <button data-mode="cdiff" class="mode" title="Colour difference: long (D5+D6) minus 3.3 µm methane band (D4) – brown dwarfs pop out">D6−D4</button>
         <button data-mode="stack" class="mode" title="Stack: median of all visits. In Solar System object mode this is shift-and-add: the object adds up while background stars blur out (S)">Stack</button>
+        <button data-mode="track" class="mode" title="Parallax tracker: shift the single images of each visit along the path of a distant body and stack them, so a slow mover (e.g. a planet far beyond Neptune) adds up instead of being removed by the median (T)">Track</button>
+      </div>
+      <div class="group tracker" id="tracker" hidden>
+        <label title="Trial distance from the Sun. A distant body drifts across the sky mainly because the Earth moves: ~17 px during a 15-day visit at 100 AU, ~3 px at 500 AU.">Distance
+          <input id="trkDist" type="range" min="1.4" max="3.6" step="0.005" value="2.7"> <b id="trkDistVal"></b></label>
+        <label title="Extra on-sky motion of the body itself (its orbit), arcsec/day towards east. ~0 beyond a few hundred AU.">+ east <input id="trkVe" type="number" step="0.1" value="0" class="num">″/day</label>
+        <label title="Extra on-sky motion towards north, arcsec/day">+ north <input id="trkVn" type="number" step="0.1" value="0" class="num">″/day</label>
+        <span class="muted small" id="trkNote"></span>
       </div>
       <div class="group dets" id="dets" aria-label="Detectors"></div>
       <div class="group advanced">
@@ -185,7 +193,7 @@
 <footer class="foot">
   <p>Data: NASA SPHEREx via NASA/IPAC Infrared Science Archive (IRSA). This tool makes use of data products from the Spectro-Photometer for the History of the Universe, Epoch of Reionization and Ices Explorer (SPHEREx), which is a joint project of the Jet Propulsion Laboratory and the California Institute of Technology, and is funded by the National Aeronautics and Space Administration. DOIs: 10.26131/IRSA678 (DR1), 10.26131/IRSA662 (QR3).</p>
   <p>This research has made use of the NASA/IPAC Infrared Science Archive, ESA Gaia DR3 (Gaia Collaboration 2023), the JPL Small-Body Identification API, CDS Sesame, and the Canadian Astronomy Data Centre (operated by the National Research Council of Canada with the support of the Canadian Space Agency). Built for the NASA Space Apps Challenge 2026. Not an official NASA product.</p>
-  <p class="muted">Keyboard: Space play/pause · ← → step · B blink · D difference · C colour · I invert · + − zoom</p>
+  <p class="muted">Keyboard: Space play/pause · ← → step · B blink · D difference · C colour · T track · I invert · + − zoom</p>
 </footer>
 </body>
 </html>

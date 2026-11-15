@@ -187,6 +187,7 @@ function rebuildDisplay() {
       });
     } else S.display = base.map((a) => [a]);
   }
+  if (S.mode === "track") S.display = trackDisplay();
   findCandidates();
   computeLimits();
   render();
@@ -322,9 +323,11 @@ function render() {
   } else {
     $("epochLabel").textContent = e.archival ? `${e.label} · ${e.date_start.slice(0, 4)} · ${archBands(e)} (archival${S.mode === "diff" ? ", minus SPHEREx median" : ""})`
       : S.mode === "stack" ? `Stack of all ${S.epochs.length} visits`
+      : S.mode === "track" ? `${e.date_start} → ${e.date_end.slice(5)} · ${trackLabel(e.epoch)}`
       : `${e.date_start}${e.date_end !== e.date_start ? " → " + e.date_end.slice(5) : ""} · ${e.n_images} images · ${S.mode === "color" ? "colour" : S.mode === "cdiff" ? "D5+D6 − D4" : [...S.dets].join("+")}${S.mode === "diff" ? " − median" : ""}`;
   }
   document.querySelectorAll(".timeline button").forEach((b, i) => b.classList.toggle("cur", i === S.cur));
+  if (S.mode === "track") trkNote();   // the drift depends on the visit on screen
   drawOverlay();
 }
 function view() {
@@ -553,7 +556,8 @@ function onResult(res, opt = {}) {
   }
   if (res.mode === "moving") {
     S.dets = new Set(DETS);                 // each frame is a single detector image
-    if (S.mode === "diff" || S.mode === "cdiff") S.mode = "blink";
+    if (S.mode === "diff" || S.mode === "cdiff" || S.mode === "track") S.mode = "blink";
+    $("tracker").hidden = true;
     document.querySelectorAll(".mode").forEach((b) => b.classList.toggle("on", b.dataset.mode === S.mode));
     $("targetName").textContent = res.name;
   }
@@ -799,6 +803,105 @@ function share(text, btn) {   // show the text ready to copy, and copy it when t
   const box = $("shareBox"), label = btn.textContent;
   box.hidden = false; box.value = text; box.select();
   navigator.clipboard?.writeText(text).then(() => { btn.textContent = "Copied ✓"; setTimeout(() => (btn.textContent = label), 1500); }).catch(() => {});
+}
+
+// ---------------------------------------------------------------- parallax tracker
+/* The normal frames are a median of all images of a visit, which also removes anything that moves
+   during the visit (10-40 days). A body far beyond Neptune drifts mostly because the Earth moves
+   (~17 px in a 15-day visit at 100 AU, ~3 px at 500 AU). Here the single images of a visit are shifted along the path of a body at a
+   trial distance d (a fixed point in space seen from the Earth's position at each image) plus a
+   constant on-sky rate for its own orbit, then median-stacked: such a body adds up, stars smear.
+   Checked against JPL Horizons for Eris, Makemake, Sedna and Neptune: < 0.4 px over 40 days. */
+const TRK = { key: null, visits: new Map(), loading: new Set(), failed: new Set() };
+const fmtAU = (d) => `${d < 100 ? d.toFixed(0) : Math.round(d / 10) * 10} AU`;
+function trkParams() { return { d: 10 ** +$("trkDist").value, ve: +$("trkVe").value || 0, vn: +$("trkVn").value || 0 }; }
+function trkVisit(ep) {   // normalised single images of one SPHEREx visit (fetched on demand), or null
+  if (!S.result || isMoving() || ep < 0) return null;
+  if (TRK.key !== S.key) { TRK.key = S.key; TRK.visits.clear(); TRK.loading.clear(); TRK.failed.clear(); }
+  if (TRK.visits.has(ep)) return TRK.visits.get(ep);
+  // the server keeps a field only when it has finished loading: ask after that, and not again after a failure
+  if (S.result.partial || TRK.failed.has(ep)) return null;
+  if (!TRK.loading.has(ep)) {
+    const key = S.key;
+    TRK.loading.add(ep);
+    api(`/api/track/${key}/${ep}`).then((r) => {
+      if (TRK.key !== key) return;
+      TRK.visits.set(ep, r.images.map((im) => {   // same normalisation as normaliseFrames
+        const a = decodeF32(im.data), fin = Array.from(a).filter(Number.isFinite).sort((p, q) => p - q);
+        const med = percentile(fin, 50), mad = percentile(fin.map((v) => Math.abs(v - med)).sort((p, q) => p - q), 50) * 1.4826 || 1;
+        for (let i = 0; i < a.length; i++) a[i] = (a[i] - med) / mad;
+        return { mjd: im.mjd, det: im.det, earth: im.earth, z: a };
+      }));
+    }).catch(() => { if (TRK.key === key) TRK.failed.add(ep); })   // pressing Track again retries
+      .finally(() => { TRK.loading.delete(ep); if (TRK.key === key) trkRedraw(); });
+  }
+  return null;
+}
+function trkShifts(ims, p) {   // [dx, dy] px of the body in each image, relative to the visit's middle image
+  const [ra0, dec0] = S.result.grid.crval, pix = Math.abs(S.result.grid.cdelt[0]) * 3600;
+  const u0 = [Math.cos(dec0 * D2R) * Math.cos(ra0 * D2R), Math.cos(dec0 * D2R) * Math.sin(ra0 * D2R), Math.sin(dec0 * D2R)];
+  const ref = ims[ims.length >> 1], P = ref.earth.map((e, k) => e + p.d * u0[k]);   // the body, fixed in space
+  const [cx, cy] = world2pix(ra0, dec0);
+  return ims.map((im) => {
+    const v = P.map((x, k) => x - im.earth[k]), n = Math.hypot(...v);
+    const [x, y] = world2pix((Math.atan2(v[1], v[0]) / D2R + 360) % 360, Math.asin(v[2] / n) / D2R), dt = im.mjd - ref.mjd;
+    return [x - cx - (p.ve * dt) / pix, y - cy + (p.vn * dt) / pix];   // grid x grows westward
+  });
+}
+function bilinear(a, nx, ny, x, y) {
+  const x0 = Math.floor(x), y0 = Math.floor(y), fx = x - x0, fy = y - y0;
+  if (x0 < 0 || y0 < 0 || x0 >= nx - 1 || y0 >= ny - 1) return NaN;
+  const i = y0 * nx + x0;
+  return (a[i] * (1 - fx) + a[i + 1] * fx) * (1 - fy) + (a[i + nx] * (1 - fx) + a[i + nx + 1] * fx) * fy;
+}
+function trackFrame(ep) {   // shift-and-median of one visit for the current trial distance and rate
+  const ims = trkVisit(ep);
+  if (!ims || !ims.length) return null;
+  const [ny, nx] = S.result.grid.shape, sh = trkShifts(ims, trkParams());
+  const dets = ims.some((im) => S.dets.has(im.det)) ? [...S.dets] : DETS;
+  const out = new Float32Array(nx * ny), cnt = new Uint8Array(nx * ny), tmp = [];
+  for (const det of dets) {
+    const sel = ims.map((im, k) => [im.z, sh[k]]).filter((_, k) => ims[k].det === det);
+    if (!sel.length) continue;
+    const need = Math.min(3, sel.length);   // one image alone could be a cosmic ray
+    for (let y = 0; y < ny; y++) for (let x = 0; x < nx; x++) {
+      tmp.length = 0;
+      for (const [z, [sx, sy]] of sel) { const v = bilinear(z, nx, ny, x + sx, y + sy); if (Number.isFinite(v)) tmp.push(v); }
+      if (tmp.length < need) continue;
+      tmp.sort((a, b) => a - b);
+      const h = tmp.length >> 1, i = y * nx + x;
+      out[i] += tmp.length & 1 ? tmp[h] : (tmp[h - 1] + tmp[h]) / 2; cnt[i]++;
+    }
+  }
+  for (let i = 0; i < out.length; i++) out[i] = cnt[i] ? out[i] / Math.sqrt(cnt[i]) : NaN;   // as in composite()
+  return out;
+}
+function trackDisplay() {   // until a visit's single images are there, show its normal frame
+  return S.epochs.map((e) => [e.archival ? null : trackFrame(e.epoch) || composite(e.epoch, [...S.dets])]);
+}
+function trackLabel(ep) {
+  const ims = TRK.key === S.key ? TRK.visits.get(ep) : null;
+  if (S.result.partial) return "normal frame: Track starts when the field has finished loading";
+  if (TRK.key === S.key && TRK.failed.has(ep)) return "normal frame: the single images could not be loaded (press Track to retry)";
+  if (!ims) return "normal frame while the single images load…";
+  if (!ims.length) return "no single images for this visit";
+  const n = ims.filter((im) => S.dets.has(im.det)).length || ims.length;
+  return `${n} single image${n === 1 ? "" : "s"} shifted for a body at ${fmtAU(trkParams().d)}`;
+}
+function trkNote() {
+  const p = trkParams();
+  $("trkDistVal").textContent = fmtAU(p.d);
+  const e = S.epochs[S.cur], ims = e && TRK.key === S.key ? TRK.visits.get(e.epoch) : null;
+  if (S.mode !== "track" || !ims || !ims.length) { $("trkNote").textContent = ""; return; }
+  const sh = trkShifts(ims, p), xs = sh.map((s) => s[0]), ys = sh.map((s) => s[1]);
+  const drift = Math.hypot(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys));
+  $("trkNote").textContent = `A body at ${fmtAU(p.d)} moves ${drift.toFixed(0)} px (${(drift * 6.15 / 60).toFixed(1)}′) during this visit; ` +
+    `where it leaves the field, those images are left out. Stars smear, the body adds up at the right distance.`;
+}
+function trkRedraw() {
+  trkNote();
+  if (S.mode !== "track" || !S.result) return;
+  S.display = trackDisplay(); computeLimits(); render(); setHash();
 }
 
 // ---------------------------------------------------------------- measured proper motion
@@ -1081,13 +1184,20 @@ function setHash() {
   h.set("fov", S.fov); h.set("mode", S.mode); h.set("dets", [...S.dets].join(","));
   const dr = dateRange(); if (dr.from) h.set("from", dr.from); if (dr.to) h.set("to", dr.to);
   h.set("speed", $("speed").value); if (!$("invert").checked) h.set("invert", "0"); if (+$("zoom").value !== 1) h.set("zoom", $("zoom").value);
+  if (S.mode === "track") {
+    const p = trkParams();
+    h.set("dist", Math.round(p.d)); if (p.ve) h.set("ve", p.ve); if (p.vn) h.set("vn", p.vn);
+  }
   if (S.embed) h.set("embed", "1");
   history.replaceState(null, "", "#" + h.toString());
   $("openFull").href = viewUrl(false);
 }
 function setMode(m) {
+  if (m === "track" && isMoving()) return;   // Solar System object frames are already centred on the object
+  if (m === "track") TRK.failed.clear();
   S.mode = m; document.querySelectorAll(".mode").forEach((b) => b.classList.toggle("on", b.dataset.mode === m));
-  setHash(); rebuildDisplay();
+  $("tracker").hidden = m !== "track";
+  setHash(); rebuildDisplay(); trkNote();
 }
 const esc = (s) => String(s).replace(/[&<>"']/g, (ch) => `&#${ch.charCodeAt(0)};`);
 /* A rejected search: say what is wrong and show the accepted formats as clickable examples. */
@@ -1137,6 +1247,9 @@ async function initFromHash(targets) {
   document.body.classList.toggle("embed", S.embed);
   if (h.get("fov")) setFovOption(+h.get("fov"));
   if (h.get("mode")) S.mode = h.get("mode");
+  if (+h.get("dist") > 0) $("trkDist").value = Math.log10(Math.min(4000, Math.max(25, +h.get("dist"))));
+  $("trkVe").value = +h.get("ve") || 0; $("trkVn").value = +h.get("vn") || 0;
+  $("tracker").hidden = S.mode !== "track"; trkNote();
   if (h.get("dets")) S.dets = new Set(h.get("dets").split(",").filter((d) => DETS.includes(d)));
   // always follow the link (also cleared): a saved-candidate link opened later must not inherit old dates
   $("dFrom").value = /^\d{4}-\d{2}-\d{2}$/.test(h.get("from") || "") ? h.get("from") : "";
@@ -1186,6 +1299,7 @@ async function main() {
   $("speed").oninput = () => setHash();
   ["ovTarget", "ovGaia", "ovBorder", "ovCand"].forEach((id) => ($(id).onchange = drawOverlay));
   $("ovArch").onchange = () => { rebuildDisplay(); showMotionBadge(); };
+  ["trkDist", "trkVe", "trkVn"].forEach((id) => ($(id).oninput = trkRedraw));
   $("saveCand").onclick = addSaved;
   $("savedCsv").onclick = downloadSaved;
   $("copyLink").onclick = () => share(viewUrl(false), $("copyLink"));
@@ -1237,6 +1351,7 @@ async function main() {
     else if (k === "arrowright") { play(false); step(1); }
     else if (k === "b") setMode("blink"); else if (k === "d") setMode("diff"); else if (k === "c") setMode("color");
     else if (k === "s") setMode("stack");
+    else if (k === "t") setMode("track");
     else if (k === "i") { $("invert").checked = !$("invert").checked; render(); setHash(); }
     else if (k === "+" || k === "=") { $("zoom").value = Math.min(4, +$("zoom").value + 0.25); render(); }
     else if (k === "-") { $("zoom").value = Math.max(1, +$("zoom").value - 0.25); render(); }
