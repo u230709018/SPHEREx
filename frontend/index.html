@@ -111,7 +111,7 @@
 
     <div class="timeline" id="timeline" aria-label="Epochs"></div>
     <p class="small range-note" id="rangeNote" hidden></p>
-    <p class="muted small time-note">SPHEREx began its survey in May 2025, so its own visits span 2025–2026 (new data arrive weekly). To stretch the time baseline to ~25 years, archival 2MASS (~2000) and WISE (2010) images of the same field are added as extra frames; see also the 1950s–1990s plates in “Sky context &amp; long-term motion” below.</p>
+    <p class="muted small time-note">SPHEREx began its survey in May 2025, so its own visits span 2025–2026 (new data arrive weekly). To stretch the time baseline to ~25 years, archival 2MASS (~2000) and WISE (2010) images of the same field are added as extra frames; see also the 1950s–1990s plates in “Sky context &amp; long-term motion” below.<span id="indexNote"></span></p>
 
     <div class="controls">
       <div class="group">
@@ -151,8 +151,15 @@
       </div>
         </div>
       </details>
+      <div class="group share">
+        <button id="saveCand" title="Save the clicked position (or the target) to your candidate list">★ Save as candidate</button>
+        <button id="copyLink" title="Link to exactly this view">Copy link</button>
+        <button id="copyEmbed" title="HTML snippet that shows this viewer inside another web page">Copy embed code</button>
+        <input id="shareBox" type="text" readonly hidden aria-label="Text to copy">
+      </div>
     </div>
     <details class="advanced resources"><summary>External resources</summary><div class="links" id="links"></div></details>
+    <a id="openFull" class="open-full" target="_blank" rel="noopener" href="./">Open in SPHEREx Time Machine ↗</a>
   </section>
 
   <section class="card context" id="contextCard" hidden>
@@ -191,6 +198,14 @@
       <div id="lcPlot" class="plot small-plot"></div>
       <p class="muted small">Brightness over time, normalised per detector. If no source is detected, raw flux is shown in mJy. For sky positions, click the image to inspect another point.</p>
     </section>
+    <section class="card">
+      <div class="card-head">
+        <h3>Your candidates <span id="savedCount" class="muted"></span></h3>
+        <button id="savedCsv" class="ghost small" disabled>Download CSV</button>
+      </div>
+      <ul id="savedList" class="small cands"></ul>
+      <p class="muted small">Kept in this browser only. The CSV has coordinates, visit date, Gaia match and a link back to each view, ready to share with a science team or check in WiseView.</p>
+    </section>
     <section class="card" id="warnCard" hidden>
       <h3>Data-quality notes</h3>
       <ul id="warnings" class="small"></ul>
@@ -202,6 +217,7 @@
         <li><b>Difference:</b> A moving source may appear as a light/dark pair.</li>
         <li><b>Boxes:</b> Highlight possible changes, not confirmed discoveries.</li>
         <li><b>Check:</b> Artifacts and missing Gaia matches need further investigation.</li>
+        <li><b>Save:</b> Click a source and choose “Save as candidate” to keep it in this browser.</li>
       </ul>
     </section>
   </aside>

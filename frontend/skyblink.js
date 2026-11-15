@@ -3,8 +3,10 @@ const explore = document.getElementById("skyblink-explore");
 const teamView = document.getElementById("team-view");
 const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)");
 
-teamView.inert = true;
-if (!reducedMotion.matches) {
+const isEmbed = new URLSearchParams(location.hash.slice(1)).get("embed") === "1";
+teamView.inert = !isEmbed;
+if (isEmbed) opening.hidden = true;
+if (!isEmbed && !reducedMotion.matches) {
   for (const animation of opening.querySelectorAll("animate, animateMotion")) {
     animation.beginElement?.();
   }
