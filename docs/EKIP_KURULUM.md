@@ -19,6 +19,13 @@ Tarayıcıda **http://localhost:8000** adresini açın. Demo hedefleri (`data/re
   .venv/bin/python scripts/warm_cache.py 5
   ```
 
+- **Yeni SPHEREx verisi (QR/DR) yayımlanınca** dizini güncelleyin ve `data/index/spherex_index.npz`'yi commit'leyin. Sürüm klasörleri AWS'den kendiliğinden bulunur; yalnızca yeni dosyalar okunur. Sayfadaki "Searchable SPHEREx images: up to …" notu dizinin hangi tarihe kadar olduğunu gösterir.
+
+  ```bash
+  .venv/bin/python scripts/list_s3.py
+  .venv/bin/python scripts/build_index.py
+  ```
+
 ## 2. Dosya haritası: kim nereye bakar
 
 | Rol | Dosyalar |
@@ -67,4 +74,5 @@ Tarayıcıda **http://localhost:8000** adresini açın. Demo hedefleri (`data/re
 - [x] Yayına alındı: **https://spherex-time-machine.onrender.com** (Render, ücretsiz). `main`'e her push otomatik deploy eder; 15 dk kullanılmazsa uyur, ilk açılış ~1 dk
 - [x] PSF fotometrisi + Gaia komşu ayrıştırma (WISE 0855: D1–D4 ≈ 0, D4 0.03 mJy ≈ Spitzer 3.6 µm, D5–D6 ≈ WISE W2)
 - [x] Otomatik aday kutuları (mover? / variable? / one visit only). Çok parlak doymuş hedeflerde kendiliğinden kapanır
+- [x] Aday listesi + CSV, gömülü mod (`embed=1`, "Copy link", "Copy embed code"), hatalı giriş yardımı, SIMBAD (Harvard) yedeği, "Latest image" rozeti
 - [ ] Mobil görünüm kontrolü, demo videosu (≤30 sn), 7 slayt, proje sayfası metni (İngilizce)

@@ -77,7 +77,7 @@
 
     <div class="timeline" id="timeline" aria-label="Epochs"></div>
     <p class="small range-note" id="rangeNote" hidden></p>
-    <p class="muted small time-note">SPHEREx began its survey in May 2025, so its own visits span 2025–2026 (new data arrive weekly). To stretch the time baseline to ~25 years, archival 2MASS (~2000) and WISE (2010) images of the same field are added as extra frames; see also the 1950s–1990s plates in “Sky context &amp; long-term motion” below.</p>
+    <p class="muted small time-note">SPHEREx began its survey in May 2025, so its own visits span 2025–2026 (new data arrive weekly). To stretch the time baseline to ~25 years, archival 2MASS (~2000) and WISE (2010) images of the same field are added as extra frames; see also the 1950s–1990s plates in “Sky context &amp; long-term motion” below.<span id="indexNote"></span></p>
 
     <div class="controls">
       <div class="group">
@@ -95,13 +95,13 @@
         <button data-mode="stack" class="mode" title="Stack: median of all visits. In Solar System object mode this is shift-and-add: the object adds up while background stars blur out (S)">Stack</button>
       </div>
       <div class="group dets" id="dets" aria-label="Detectors"></div>
-      <div class="group">
+      <div class="group advanced">
         <label>Black <input id="lo" type="range" min="0" max="50" step="0.5" value="2"></label>
         <label>White <input id="hi" type="range" min="90" max="100" step="0.1" value="99.5"></label>
         <label>Asinh <input id="asinh" type="range" min="0" max="30" step="1" value="8"></label>
         <label class="chk"><input id="invert" type="checkbox" checked> Invert</label>
       </div>
-      <div class="group">
+      <div class="group advanced">
         <label class="chk" title="Add archival 2MASS (1997–2001) and WISE (2010) images of the same field as extra frames in Blink and Difference modes"><input id="ovArch" type="checkbox" checked> 2MASS + WISE frames (1998–2010)</label>
         <label class="chk"><input id="ovTarget" type="checkbox" checked> Target track</label>
         <label class="chk"><input id="ovGaia" type="checkbox"> Gaia DR3</label>
@@ -109,8 +109,15 @@
         <label class="chk"><input id="ovBorder" type="checkbox" checked> Mark first epoch</label>
         <label class="chk" title="Boxes mark automatic detections on the difference images: movers (dipoles), variables, and sources seen in one visit only"><input id="ovCand" type="checkbox" checked> Auto-detect candidates</label>
       </div>
+      <div class="group share">
+        <button id="saveCand" title="Save the clicked position (or the target) to your candidate list">★ Save as candidate</button>
+        <button id="copyLink" title="Link to exactly this view">Copy link</button>
+        <button id="copyEmbed" title="HTML snippet that shows this viewer inside another web page">Copy embed code</button>
+        <input id="shareBox" type="text" readonly hidden aria-label="Text to copy">
+      </div>
     </div>
     <div class="links" id="links"></div>
+    <a id="openFull" class="open-full" target="_blank" rel="noopener" href="./">Open in SPHEREx Time Machine ↗</a>
   </section>
 
   <section class="card context" id="contextCard" hidden>
@@ -149,6 +156,14 @@
       <div id="lcPlot" class="plot small-plot"></div>
       <p class="muted small">Median flux per visit and detector, normalised per detector. Variable stars change; moving objects stay flat. If no source is detected at the position, the raw fluxes (mJy, around zero) are shown instead. Click any star in the image to see its own light curve.</p>
     </section>
+    <section class="card">
+      <div class="card-head">
+        <h3>Your candidates <span id="savedCount" class="muted"></span></h3>
+        <button id="savedCsv" class="ghost small" disabled>Download CSV</button>
+      </div>
+      <ul id="savedList" class="small cands"></ul>
+      <p class="muted small">Kept in this browser only. The CSV has coordinates, visit date, Gaia match and a link back to each view, ready to share with a science team or check in WiseView.</p>
+    </section>
     <section class="card" id="warnCard" hidden>
       <h3>Data-quality notes</h3>
       <ul id="warnings" class="small"></ul>
@@ -158,7 +173,7 @@
       <ul class="small tips">
         <li><b>Blink:</b> stars stay put; a dot that hops between epochs is moving.</li>
         <li><b>Difference:</b> static stars vanish; a mover leaves a <i>dipole</i> (dark/bright pair).</li>
-        <li><b>Boxes:</b> automatic detections – pink <i>mover?</i> (dipole), blue <i>variable?</i>, yellow <i>one visit only</i> (asteroid, transient or artifact: check the asteroid overlay). They are hints, not discoveries – always look yourself.</li>
+        <li><b>Boxes:</b> automatic detections – pink <i>mover?</i> (dipole), blue <i>variable?</i>, yellow <i>one visit only</i> (asteroid, transient or artifact: check the asteroid overlay). They are hints, not discoveries – always look yourself. Click a source and press “Save as candidate” to keep it (yellow ★ square).</li>
         <li><b>D6−D4:</b> cold brown dwarfs are bright at 4.5 µm but dark in the 3.3 µm methane band.</li>
         <li><b>No Gaia match?</b> A moving source invisible to Gaia is too cold for optical light – exactly how volunteers find brown dwarfs.</li>
         <li><b>Beware artifacts:</b> ghosts and cosmic rays appear in one frame only, or move with the detector instead of the sky.</li>
