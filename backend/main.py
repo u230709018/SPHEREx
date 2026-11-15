@@ -166,6 +166,8 @@ def result(key: str):
     r = pl.cached_result(key)
     if not r:
         raise HTTPException(404, "Result not found")
+    if r.get("mode") != "moving":
+        pl.prefetch_cutouts(key)          # so clicking a star in this field is quick
     return JSONResponse(r)
 
 

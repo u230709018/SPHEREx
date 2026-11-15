@@ -48,24 +48,58 @@ def _remember(key: str, cutouts: list[sx.Cutout]):
             _CUTOUT_LRU.popitem(last=False)
 
 
+_INFLIGHT: dict = {}                       # key -> threading.Event while its cutouts are being loaded
+_PREFETCH = ThreadPoolExecutor(max_workers=1)
+
+
 def cutouts_for(key: str, params: dict) -> list[sx.Cutout]:
-    """Cutouts of a finished job (memory, else re-read from the disk cache)."""
+    """Cutouts of a finished job: from memory, else re-read (disk cache, or the cloud after a restart).
+    Images are fetched in parallel, and concurrent callers for the same field wait for one load."""
     with _LRU_LOCK:
         if key in _CUTOUT_LRU:
             return _CUTOUT_LRU[key]
-    res = cached_result(key)
-    if not res:
-        return []
-    ra0, dec0, size = res["grid"]["crval"][0], res["grid"]["crval"][1], res["fov_arcmin"] / 60
-    cutouts = []
-    for im in res["images"]:
-        rec = sx.ImageRecord(uri=im["uri"], mjd=im["mjd"], det=im["det"], epoch=im["epoch"])
-        path = sx.fetch_cutout(sx.cutout_url(rec, ra0, dec0, size))
-        c = sx.load_cutout(rec, path) if path else None
-        if c is not None:
-            cutouts.append(c)
-    _remember(key, cutouts)
-    return cutouts
+        ev = _INFLIGHT.get(key)
+        owner = ev is None
+        if owner:
+            ev = _INFLIGHT[key] = threading.Event()
+    if not owner:
+        ev.wait(timeout=600)
+        with _LRU_LOCK:
+            return _CUTOUT_LRU.get(key, [])
+    try:
+        res = cached_result(key)
+        if not res or res.get("mode") == "moving":
+            return []
+        ra0, dec0, size = res["grid"]["crval"][0], res["grid"]["crval"][1], res["fov_arcmin"] / 60
+
+        def load(im):
+            rec = sx.ImageRecord(uri=im["uri"], mjd=im["mjd"], det=im["det"], epoch=im["epoch"])
+            path = sx.fetch_cutout(sx.cutout_url(rec, ra0, dec0, size))
+            return sx.load_cutout(rec, path) if path else None
+
+        with ThreadPoolExecutor(max_workers=16) as pool:
+            cutouts = [c for c in pool.map(load, res["images"]) if c is not None]
+        if cutouts:
+            _remember(key, cutouts)
+        return cutouts
+    finally:
+        with _LRU_LOCK:
+            _INFLIGHT.pop(key, None)
+        ev.set()
+
+
+def prefetch_cutouts(key: str):
+    """Start loading a field's images in the background (a cached field was just opened), so that
+    clicking a star in it answers quickly even right after a server restart."""
+    with _LRU_LOCK:
+        if key in _CUTOUT_LRU or key in _INFLIGHT:
+            return
+    def warm():
+        cutouts_for(key, {})
+        res = cached_result(key)
+        if res:
+            gaia_neighbors(key, res["grid"]["crval"][0], res["grid"]["crval"][1], res["fov_arcmin"], res["epochs"])
+    _PREFETCH.submit(warm)
 
 
 def target_track(p: dict, mjds: list[float]) -> list[tuple[float, float]]:

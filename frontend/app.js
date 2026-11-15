@@ -1362,12 +1362,15 @@ async function main() {
     const r = ov.getBoundingClientRect(), cx = ((ev.clientX - r.left) / r.width) * ov.width, cy = ((ev.clientY - r.top) / r.height) * ov.height;
     const [ra, dec] = pix2world(...fromCanvas(cx, cy));
     S.specLabel = { ra, dec }; drawOverlay();
-    $("specTitle").textContent = `Spectrum at ${sexa(ra, true)} ${sexa(dec)} …`;
+    $("specTitle").textContent = `Measuring at ${sexa(ra, true)} ${sexa(dec)}…`;
+    const slow = setTimeout(() => { if (S.specLabel && S.specLabel.ra === ra) $("specTitle").textContent =
+      `Measuring at ${sexa(ra, true)} ${sexa(dec)}… (first click in a stored field: loading its images, up to ~30 s)`; }, 4000);
     try {
       S.spec = await api(`/api/spectrum/${S.key}?ra=${ra}&dec=${dec}`);
+      clearTimeout(slow);
       $("specTitle").textContent = `Spectrum at ${sexa(ra, true)} ${sexa(dec)}`;
       $("specReset").hidden = false; plotSpectrum(); plotLightcurve();
-    } catch (err) { $("specTitle").textContent = `Spectrum: ${err.message}`; }
+    } catch (err) { clearTimeout(slow); $("specTitle").textContent = `Spectrum: ${err.message}`; }
   });
   document.addEventListener("keydown", (ev) => {
     if (ev.target.matches("input[type=text], select")) return;
