@@ -445,7 +445,45 @@ UL("<b>Pluto</b> (V = 14,5, 35 AU), 25 Eylül – 12 Ekim 2025 ziyareti, 8′ al
    "ziyaretteki 114 görüntünün tamamı kullanılırsa derinlik artar.")
 
 # ------------------------------------------------------------------ 13
-H1("13. Diğer dosyalar")
+H1("13. Keşif nereye bildirilir")
+P("Yan panelin en altındaki “Found something new? Where discoveries are reported” kartı, kullanıcının yeni bir şey bulduğunu düşündüğünde "
+  "onu keşiflerin gerçekten bildirildiği kurumlara yönlendirir. Kart yalnızca HTML'dir; JavaScript kodu yoktur. Araç hiçbir şey kaydetmez, hiçbir yere göndermez.")
+P("Araştırmanın sonucu şuydu: NASA'nın “keşfini buraya gir” diye bir formu ya da e-posta adresi yok. Her cisim türünün kendi resmi kanalı var ve resmi isim de o kanaldan gelir; "
+  "bulan kişi isim seçemez. Önce konumu, takma adı, bilinen-cisim kontrollerini ve hazır rapor metnini içeren bir form yapıldı. "
+  "Sonra ekip, kartın yalnızca kurumlara yönlendirmesine karar verdi ve form kaldırıldı.")
+H2("13.1 Türler ve kurumlar")
+UL("<b>Hareket eden Güneş Sistemi cismi</b> (asteroit, kuyruklu yıldız, uzak gezegen): IAU Minor Planet Center (MPC). Ölçülmüş konumlar ADES biçiminde, "
+   "MPC gözlemevi koduyla gönderilir; kodu olmayan yeni gözlemciler önce kod ister ve bilinen cisimlerde iyi ölçüm gösterir. Pratikte: MPC'ye bildiren bir kulübe, "
+   "gözlemevine ya da ekibe gönderin. Kuyruklu yıldız için ayrıca CBAT'a düz metin e-posta (cbatiau@eps.harvard.edu, konu satırında cisim türü). "
+   "İsim: numaralandıktan sonra keşfeden önerir, IAU WGSBN onaylar; kuyruklu yıldızlar keşfedenin adını alır.",
+   "<b>Kahverengi cüce / hızlı yıldız:</b> resmi kayıt yeri yok. Backyard Worlds: Planet 9 Talk forumunun Science panosu; orada başka verilerle bulunan adaylar da tartışılıyor. "
+   "İsim: koordinattan katalog adı (ör. WISEA J110125.95+540052.8); IAU yıldızlara kişi adı vermez.",
+   "<b>Değişken yıldız:</b> AAVSO VSX. Kayıt olunur, giriş yapılır, <i>Submit</i> sayfasından yeni yıldız girilir; moderatör inceler. Ani patlama (nova) önce CBAT'a.",
+   "<b>Geçici olay</b> (tek ziyarette görünüp hareket etmeyen: süpernova, nova): IAU Transient Name Server (TNS). Hesap istenir (kurum ya da gerekçe sorulur), "
+   "<i>Reports → AT report</i>. Sistem “AT 2026abc” gibi ad verir; bulanın verdiği ad “Internal name” alanına yazılabilir.")
+P("Bu adımların her biri 15 Kasım 2026'da ilgili sayfa açılarak kontrol edildi: MPC belgeleri, CBAT sayfası (e-posta adresi dahil), TNS kayıt sayfası, "
+  "VSX Submit ve Register sayfaları, Backyard Worlds Talk panoları. Kurumlar menülerini değiştirebilir; kartın altında bu tarih yazar.")
+RNG(IH, r'<section class="card report" id="reportCard">', r'<div class="rep-cols">')
+P("Kartın başlığı (“Found something new? …”) bir düğmedir. Altındaki açıklama paragrafı hep görünür; dört tür ve tarih notu ise "
+  "<code>#reportBody</code> içindedir ve sayfa açıldığında gizlidir (<code>hidden</code>). Başlığa basınca açılır, tekrar basınca kapanır; "
+  "ok işareti açıkken aşağı döner ve ekran okuyucular için <code>aria-expanded</code> güncellenir. "
+  "<code>&lt;details&gt;</code> kullanılmadı, çünkü onda açıklama paragrafı da gizlenirdi.")
+P("Paylaşım menüsündeki (“Save as candidate” ile “Copy link” arasında) <b>Report a discovery ↓</b> düğmesi listeyi açar ve sayfayı bu karta kaydırır. "
+  "Bu bir <code>#reportCard</code> bağlantısı değildir: adresin <code>#</code> sonrası görünüm ayarlarını tutar ve değişince alan yeniden yüklenir. "
+  "Düğme adresi değiştirmeden <code>scrollIntoView</code> ile kaydırır. Yerelde denendi: liste ilk açılışta kapalı, başlıkla açılıp kapanıyor; "
+  "menü düğmesi listeyi açıp kartın üst kenarını ekranın en üstüne getiriyor, adres ve yüklü alan aynı kalıyor.")
+RNG(AJ, r'"where discoveries are reported": the list under', r'\$\("reportGo"\)\.onclick')
+H2("13.2 Kartın yeri")
+RNG(CS, r'^/\* "where discoveries are reported"', r"^\.rep-kind \.name-rule")
+P("SkyBlink tasarımı yan paneldeki kartları <b>sıra numarasıyla</b> yerleştirir (<code>.side &gt; section:nth-child(4)</code> gibi). Araya yeni bir kart girerse "
+  "diğerlerinin yeri kayar ve sol tarafta boşluk kalır. Bu yüzden kart en sona konur ve kendi tam genişlikteki satırına yerleşir (masaüstünde 6. satır, telefonda 8.). "
+  "İçindeki dört tür masaüstünde iki sütun, telefonda tek sütundur.")
+NOTE("Aynı çalışmada SkyBlink'in telefon düzeninde bir hata bulundu: telefon kuralı <code>.side &gt; section { grid-column: 1 }</code>, masaüstündeki "
+     "<code>:nth-child()</code> kurallarından daha zayıf olduğu için telefonda ikinci bir sütun oluşuyor ve kartlar 28 piksele sıkışıyordu. "
+     "Telefon bölümüne aynı özgüllükte bir kural (<code>.side &gt; section:nth-child(n)</code>) eklenerek düzeltildi; 390 piksel genişlikte bütün kartlar ekran genişliğinde.")
+
+# ------------------------------------------------------------------ 14
+H1("14. Diğer dosyalar")
 RNG("backend/targets.json", r'"id": "wise0855"', r'"note"')
 P("Hazır hedeflerin konumu, öz hareketi ve bu değerlerin ait olduğu yıl.")
 RNG("scripts/warm_cache.py", r"^fovs = ", r"FAILED")
@@ -453,8 +491,8 @@ P("Hazır hedefleri önceden hesaplayıp <code>data/results/</code> klasörüne 
 RNG("render.yaml", r"^services:", r"value: ")
 P("Render'a siteyi nasıl kuracağını söyler. <code>autoDeploy: true</code> olduğu için <code>main</code> dalına her gönderim canlı siteyi günceller.")
 
-# ------------------------------------------------------------------ 14
-H1("14. Bilinen sınırlar")
+# ------------------------------------------------------------------ 15
+H1("15. Bilinen sınırlar")
 UL("Yeni bir alanın tam yüklemesi ücretli küçük sunucuda ~1 dakika sürer; ilk kareler çok daha önce gelir.",
    "Dizin kurulduğu andaki görüntüleri bilir; yeni veri için <code>scripts/list_s3.py</code> ve <code>scripts/build_index.py</code> çalıştırılıp dizin dosyası commit'lenmelidir (otomatik değildir).",
    "Çok parlak yıldızlar doymuştur: tayfları yaklaşık, ışık eğrileri yalnızca görelidir.",
@@ -462,7 +500,9 @@ UL("Yeni bir alanın tam yüklemesi ücretli küçük sunucuda ~1 dakika sürer;
    "2MASS ve WISE başka teleskoplardır: konumları karşılaştırın, parlaklıklarını değil.",
    "Paralaks izleyici yalnızca indirilen görüntüleri kullanır (dedektör başına ~8); sönük cisimler (Eris gibi) için yetmez. Ziyaret içinde çalışır; ziyaretler arası 6 ayda uzak bir cisim alanın dışına çıkar. "
    "Birkaç yüz AU'nun ötesinde kazanç azalır, çünkü SPHEREx'in bakış yönünde paralaks hareketi en yavaştır.",
-   "Aday listesi yalnızca o tarayıcıda durur; tarayıcı verisi silinirse kaybolur.")
+   "Aday listesi yalnızca o tarayıcıda durur; tarayıcı verisi silinirse kaybolur.",
+   "“Where discoveries are reported” kartı yalnızca yönlendirir: bir keşfi doğrulamaz, bildirimi kullanıcı kendisi yapar. "
+   "Adımlar 15 Kasım 2026'daki sayfalara göre yazıldı.")
 
 CSS = """
 @page { size: A4; margin: 16mm 15mm; }

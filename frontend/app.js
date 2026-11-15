@@ -453,12 +453,6 @@ function drawOverlay() {
     ctx.beginPath(); ctx.moveTo(x - 10, y); ctx.lineTo(x - 4, y); ctx.moveTo(x + 4, y); ctx.lineTo(x + 10, y);
     ctx.moveTo(x, y - 10); ctx.lineTo(x, y - 4); ctx.moveTo(x, y + 4); ctx.lineTo(x, y + 10); ctx.stroke();
   }
-  if (S.rep && S.rep.pos && inField(S.rep.pos)) {   // position of the discovery report
-    const [x, y] = toCanvas(...world2pix(S.rep.pos.ra, S.rep.pos.dec)), r = Math.max(8, px * 1.6);
-    ctx.strokeStyle = ctx.fillStyle = "#39d98a"; ctx.lineWidth = 2; ctx.font = "11px system-ui";
-    ctx.beginPath(); ctx.arc(x, y, r, 0, 2 * Math.PI); ctx.stroke();
-    ctx.fillText("report", x + r + 3, y + r);
-  }
 }
 
 // ---------------------------------------------------------------- playback
@@ -484,7 +478,6 @@ function resetView() {   // a new field is loading: nothing of the previous targ
   S.result = null; S.key = null; S.epochs = []; S.sph = []; S.display = []; S.arch = null; S.cands = [];
   $("badges").innerHTML = ""; $("timeline").innerHTML = ""; $("epochLabel").textContent = ""; $("readout").textContent = "";
   $("links").innerHTML = ""; $("warnCard").hidden = true; rangeNote(null); liveStatus(null);
-  closeReport();
   render();
   clearCharts();
 }
@@ -614,7 +607,7 @@ function onResult(res, opt = {}) {
     document.querySelectorAll(".mode").forEach((b) => b.classList.toggle("on", b.dataset.mode === S.mode));
     $("targetName").textContent = res.name;
   }
-  ["ovGaia", "ovAst", "reportBtn"].forEach((id) => ($(id).disabled = res.mode === "moving"));
+  ["ovGaia", "ovAst"].forEach((id) => ($(id).disabled = res.mode === "moving"));
   normaliseFrames();
   buildTimeline(); buildDetButtons(); rebuildDisplay();
   showProgress(false);
@@ -629,11 +622,6 @@ function onResult(res, opt = {}) {
   if (S.ctxKey !== res.key) updateContext();
   S.ctxKey = res.key;
   if (!same) play(true);
-  if (S.pendingRep) {   // "Report" on a saved candidate of another field: its field is loaded now
-    const c = S.pendingRep;
-    S.pendingRep = null;
-    if (!isMoving() && inField(c)) openReport(c);
-  }
 }
 function buildTimeline() {
   const tl = $("timeline"); tl.innerHTML = "";
@@ -776,7 +764,6 @@ async function fetchGaia() {
     el.title = "No match was found near this position; this alone does not establish that the source is new or invisible in optical light.";
   }
   drawOverlay();
-  if (S.rep) updateReport();   // the report's Gaia check can run now
 }
 function archBands(e) {   // the archival bands actually on screen for the selected detectors
   const fr = S.arch.frames.filter((f) => f.epoch === e.epoch);
@@ -839,18 +826,10 @@ function renderSaved() {
   $("savedCsv").disabled = !list.length;
   $("savedList").innerHTML = list.length
     ? list.map((c, i) => `<li><a href="${esc(c.link)}" title="Open a view centred on this position">${sexa(c.ra, true)} ${sexa(c.dec)}</a>
-        <button class="ghost small" data-i="${i}" title="Remove">✕</button>
-        <button class="ghost small rep" data-r="${i}" title="Prepare a discovery report for this candidate">Report</button><br>
+        <button class="ghost small" data-i="${i}" title="Remove">✕</button><br>
         <span class="muted">${esc(c.field || "field")} · ${esc(c.date)} · ${esc(c.dets)} · Gaia star: ${esc(c.gaia)}</span></li>`).join("")
     : `<li class="muted">Nothing saved yet. Click a source on the image, then “Save as candidate”.</li>`;
-  $("savedList").querySelectorAll("button[data-i]").forEach((b) => (b.onclick = () => { const l = loadSaved(); l.splice(+b.dataset.i, 1); storeSaved(l); }));
-  $("savedList").querySelectorAll("button[data-r]").forEach((b) => (b.onclick = () => {
-    const c = loadSaved()[+b.dataset.r];
-    if (!c) return;
-    if (S.result && !isMoving() && inField(c)) return openReport(c);
-    S.pendingRep = c;                          // another field: open its view, the report follows when it is loaded
-    location.hash = new URL(c.link).hash;
-  }));
+  $("savedList").querySelectorAll("button").forEach((b) => (b.onclick = () => { const l = loadSaved(); l.splice(+b.dataset.i, 1); storeSaved(l); }));
 }
 function downloadSaved() {
   const cols = ["ra_deg", "dec_deg", "ra_hms", "dec_dms", "field", "visit_date", "mode", "detectors", "gaia_star_within_4arcsec", "link", "saved_utc"];
@@ -862,263 +841,6 @@ function downloadSaved() {
   URL.revokeObjectURL(a.href);
 }
 
-// ---------------------------------------------------------------- discovery report (prepared here, sent by the user)
-/* Nothing is stored or sent. The panel takes a position (the click, centred on the source, or typed in),
-   checks whether something known sits there, writes a plain-text report and says which official
-   service takes which kind of discovery. Official names come from those services, not from the finder. */
-const REP_SEARCH_PX = 2, REP_GAIA_ARCSEC = 4, REP_AST_ARCSEC = 30;   // a click lands within ~1-2 px of the source; wider jumps to neighbours
-const LINK = {
-  mpcReport: "https://docs.minorplanetcenter.net/mpc-ops-docs/astrometry/reporting-observations/",
-  mpcCodes: "https://docs.minorplanetcenter.net/mpc-ops-docs/observatory-and-program-codes/observatory-codes/",
-  cbat: "http://www.cbat.eps.harvard.edu/HowToReportDiscovery.html",
-  bywScience: "https://www.zooniverse.org/projects/marckuchner/backyard-worlds-planet-9/talk/694",
-  bywHelp: "https://www.zooniverse.org/projects/marckuchner/backyard-worlds-planet-9/talk/693",
-  vsxSubmit: "https://vsx.aavso.org/index.php?view=submit.top",
-  vsxRegister: "https://vsx.aavso.org/index.php?view=registration.top",
-  tns: "https://www.wis-tns.org/",
-  tnsRegister: "https://www.wis-tns.org/user/register",
-};
-const a_ = (href, text) => `<a href="${href}" target="_blank" rel="noopener">${text} ↗</a>`;
-const CBAT_MAIL = "<code>cbatiau@eps.harvard.edu</code>";
-const REP_HOW = {
-  moving: {
-    steps: [
-      "Make sure it moves the same way in at least two visits (Blink, Difference), or adds up in Track mode. Something seen in one image only is often a cosmic ray or a ghost.",
-      `Known asteroids and comets are checked above (JPL). The official list is kept by the IAU ${a_(LINK.mpcReport, "Minor Planet Center (MPC)")}.`,
-      `The MPC takes measured positions (astrometry, ADES format) through its web forms from observers with an ${a_(LINK.mpcCodes, "MPC observatory code")}; new observers ask for a code and first show good measurements of known objects. In practice: send this report to an astronomy club, observatory or survey team that reports to the MPC, so they can confirm and submit it.`,
-      `A possible comet (fuzzy, with a tail): also e-mail the IAU ${a_(LINK.cbat, "Central Bureau for Astronomical Telegrams")} at ${CBAT_MAIL}, as plain text with the object type in the subject line.`,
-    ],
-    names: "Names: once an asteroid's orbit is secure and it is numbered, its discoverer may propose a name, which the IAU Working Group on Small Body Nomenclature approves. Comets carry the names of their discoverers.",
-  },
-  brown: {
-    steps: [
-      "A source that moves between visits but has no Gaia star at its position is a classic brown-dwarf candidate: too cold to shine in optical light. Check SIMBAD (link above) and the measured-motion badge.",
-      `There is no official registry for new brown dwarfs. Share it with the people who follow them up: post this report on the ${a_(LINK.bywScience, "Backyard Worlds: Planet 9 Talk forum")} (Science board, Zooniverse account needed to post), where volunteers and astronomers discuss candidates, also ones found in other data.`,
-      "Confirmation needs follow-up with other telescopes (spectra, more images). Volunteers who found brown dwarfs this way have been co-authors of the science papers.",
-    ],
-    names: "Names: new stars and brown dwarfs get catalogue designations built from their coordinates (e.g. WISEA J110125.95+540052.8). The IAU does not give personal names to them.",
-  },
-  variable: {
-    steps: [
-      "Check the VSX link above: a variable listed there is already known.",
-      `${a_(LINK.vsxRegister, "Register")} and log in at the AAVSO International Variable Star Index, then use ${a_(LINK.vsxSubmit, "Submit")} to enter a new variable star. Moderators check that it is variable and new; the per-visit fluxes in your report are your evidence.`,
-      `A sudden outburst (possible nova): e-mail the ${a_(LINK.cbat, "CBAT")} first, ${CBAT_MAIL}, as plain text.`,
-    ],
-    names: "Names: VSX lists the star under a catalogue designation; the finder does not choose it.",
-  },
-  transient: {
-    steps: [
-      "Check the TNS link above for a known transient. Rule out artifacts: look at the Data-quality notes and at the single detectors.",
-      `${a_(LINK.tnsRegister, "Request an account")} on the IAU ${a_(LINK.tns, "Transient Name Server (TNS)")} (it asks for your affiliation or, without one, why you need the account), log in and open <b>Reports → AT report</b>. It asks for the discovery brightness and the last time the source was not seen: both are in the per-visit fluxes of your report.`,
-      `Novae and comets: e-mail the ${a_(LINK.cbat, "CBAT")}, ${CBAT_MAIL}, as plain text.`,
-    ],
-    names: "Names: TNS gives every new transient a designation such as AT 2026abc. Your nickname can go in its “Internal name” field.",
-  },
-  unsure: {
-    steps: [
-      "Watch it in Blink and Difference over all visits: does it move (Solar System body or nearby star), change brightness in place (variable), or appear in one visit only (transient or artifact)?",
-      `Then pick the matching type above to see where it is reported. Still unsure? Ask on the ${a_(LINK.bywHelp, "Backyard Worlds Talk Help board")}.`,
-    ],
-    names: "Names are given by the service that registers the object, never by the finder.",
-  },
-};
-const ascii = (s) => String(s).replace(/−/g, "-").replace(/″/g, '"').replace(/′/g, "'").replace(/[–—]/g, "-").replace(/[“”]/g, '"').replace(/[‘’]/g, "'").replace(/[^\x20-\x7e\n]/g, "?");
-const sepArcsec = (a, b) => Math.hypot((((a.ra - b.ra + 540) % 360) - 180) * Math.cos(a.dec * D2R), a.dec - b.dec) * 3600;
-const visitText = (e) => (e.archival ? `${e.label} ${e.date_start}` : `${e.date_start}${e.date_end !== e.date_start ? " to " + e.date_end : ""}`);
-const pixArcsec = () => Math.abs(S.result.grid.cdelt[0]) * 3600;
-function centroidAt(ra, dec, k) {   // light-weighted centroid of a clear (> 5 sigma) source within 2 px, in visit k; else null
-  const e = S.epochs[k], img = e && composite(e.epoch, S.dets.size ? [...S.dets] : DETS);
-  if (!img) return null;
-  const [ny, nx] = S.result.grid.shape, [px, py] = world2pix(ra, dec);
-  let best = -Infinity, bx = 0, by = 0;
-  for (let y = Math.round(py) - REP_SEARCH_PX; y <= Math.round(py) + REP_SEARCH_PX; y++)
-    for (let x = Math.round(px) - REP_SEARCH_PX; x <= Math.round(px) + REP_SEARCH_PX; x++) {
-      if (x < 2 || y < 2 || x >= nx - 2 || y >= ny - 2 || Math.hypot(x - px, y - py) > REP_SEARCH_PX) continue;
-      const v = img[y * nx + x];
-      if (Number.isFinite(v) && v > best) { best = v; bx = x; by = y; }
-    }
-  if (!(best > 5)) return null;   // noise peaks in empty sky reach 3-4 sigma
-  let sw = 0, sx = 0, sy = 0;
-  for (let y = by - 2; y <= by + 2; y++)
-    for (let x = bx - 2; x <= bx + 2; x++) {
-      const v = img[y * nx + x];
-      if (Number.isFinite(v) && v > 0) { sw += v; sx += v * x; sy += v * y; }
-    }
-  const [cra, cdec] = pix2world(sx / sw, sy / sw);
-  return { ra: cra, dec: cdec, peak: best };
-}
-function gaiaMatch(p, e) {   // nearest Gaia DR3 source within 4″ at visit e; undefined = Gaia not loaded
-  if (!S.gaia || !S.gaia.provider) return undefined;
-  let best = null;
-  for (const s of S.gaia.sources) {
-    const q = gaiaPos(s, e);
-    if (!q) continue;
-    const d = sepArcsec(p, { ra: q[0], dec: q[1] });
-    if (d < REP_GAIA_ARCSEC && (!best || d < best.sep)) best = { sep: d, g: s.g };
-  }
-  return best;
-}
-function inField(p) {
-  if (!S.result) return false;
-  const [x, y] = world2pix(p.ra, p.dec), [ny, nx] = S.result.grid.shape;
-  return sepArcsec(p, { ra: S.result.grid.crval[0], dec: S.result.grid.crval[1] }) < S.fov * 60 && x >= 0 && y >= 0 && x <= nx - 1 && y <= ny - 1;
-}
-function repPosition() {   // the position typed in the box, or null if it is not a valid sky position
-  const c = parseCoords($("repPos").value.replace(/−/g, "-"));
-  return c && Number.isFinite(c.ra) && c.ra >= 0 && c.ra < 360 && Math.abs(c.dec) <= 90 ? c : null;
-}
-/* src: a saved candidate {ra, dec, date}; without it the clicked position (or the target) in the visit on screen. */
-function openReport(src) {
-  if (!S.result || isMoving()) return;
-  let k = S.cur, click, from = "saved";
-  if (src) {
-    click = { ra: src.ra, dec: src.dec };
-    const j = S.epochs.findIndex((e) => src.date === (e.archival ? `${e.label} ${e.date_start}` : e.date_start));
-    if (j >= 0) k = j;
-  } else {
-    const e = S.epochs[k], clicked = S.specLabel && S.specLabel.ra != null;
-    click = clicked ? { ra: S.specLabel.ra, dec: S.specLabel.dec } : { ra: e.target_ra, dec: e.target_dec };
-    from = clicked ? "click" : "target";
-  }
-  S.rep = { click, from, k, lc: null, astFail: false };
-  // first guess of the type: the automatic detection at this spot, or a fast-moving named target
-  const [cx, cy] = world2pix(click.ra, click.dec);
-  const cand = (S.cands?.[k] || []).find((c) => Math.hypot(c.x - cx, c.y - cy) <= 2.5);
-  const fastTarget = from === "target" && Math.hypot(S.target.pmra || 0, S.target.pmdec || 0) > 100;
-  $("repType").value = fastTarget ? "brown" : cand ? { mover: "moving", variable: "variable", single: "unsure" }[cand.kind] : "unsure";
-  $("reportCard").hidden = false;
-  setRepPos(click, true);
-  if (!S.ast) fetchAsteroids().then(() => { if (S.rep) { S.rep.astFail = !S.ast; updateReport(); } });
-  $("reportCard").scrollIntoView({ behavior: "smooth", block: "start" });
-}
-function closeReport() {
-  S.rep = null; $("reportCard").hidden = true;
-  try { S.repCat?.removeAll?.(); } catch { /* marker is optional */ }
-  if (S.result) drawOverlay();
-}
-function setRepPos(p, snap) {   // fill the box, centred on the source when there is a clear one
-  const c = snap ? centroidAt(p.ra, p.dec, S.rep.k) : null, q = c || p;
-  Object.assign(S.rep, { src: c ? "centroid" : "click", shift: c ? sepArcsec(p, c) : 0, peak: c ? c.peak : null });
-  $("repPos").value = `${sexa(q.ra, true)} ${sexa(q.dec).replace("−", "-")}`;
-  updateReport();
-}
-function markSky(p) {   // the report position on the sky map
-  if (!aladin || !window.A) return;
-  try {
-    if (!S.repCat) { S.repCat = A.catalog({ name: "Report position", sourceSize: 16, shape: "circle", color: "#39d98a" }); aladin.addCatalog(S.repCat); }
-    else S.repCat.removeAll?.();
-    S.repCat.addSources([A.source(p.ra, p.dec)]);
-  } catch { /* marker is optional */ }
-}
-function updateReport() {   // position changed: note, marker, known-object checks, photometry, report text
-  if (!S.rep || !S.result) return;
-  const p = repPosition(), e = S.epochs[S.rep.k] || S.epochs[S.cur];
-  S.rep.pos = p;
-  $("repPos").classList.toggle("bad", !p);
-  $("repCopy").disabled = $("repDl").disabled = !p;
-  drawOverlay();
-  if (!p) {
-    $("repPosNote").textContent = "Not a valid sky position. Use decimal degrees (140.3586 -6.8092) or hours and degrees (09:21:26.07 -06:48:33.0).";
-    $("repChecks").innerHTML = ""; $("repText").value = "";
-    return;
-  }
-  markSky(p);
-  const here = inField(p), pix = pixArcsec().toFixed(2);
-  const dets = S.dets.size ? [...S.dets].join("+") : "all detectors";
-  S.rep.posNote = S.rep.src === "centroid"
-    ? `centroid of the source in the ${visitText(e)} image (${dets}, ${S.rep.peak.toFixed(0)} sigma peak); SPHEREx pixels are ${pix}"`
-    : S.rep.src === "hand" ? "entered by hand"
-    : `${S.rep.from === "target" ? "target position" : "clicked position"} (no clear source above 5 sigma within ${REP_SEARCH_PX} px to centre on)`;
-  $("repPosNote").textContent = (S.rep.src === "centroid"
-    ? `Centred on the source: light-weighted centroid in the ${visitText(e)} image (${dets}), ${S.rep.shift.toFixed(1)}″ from the ${S.rep.from === "target" ? "target position" : "clicked point"}. SPHEREx pixels are ${pix}″.`
-    : S.rep.src === "hand" ? "Entered by hand."
-    : `No clear source (above 5σ) within ${REP_SEARCH_PX} pixels: the ${S.rep.from === "target" ? "target" : "clicked"} position is used as it is.`)
-    + (here ? "" : " This position is outside the loaded field, so the checks below cannot look at it: load it first.");
-  // known-object checks: [css class, html for the panel, plain text for the report]
-  const checks = [];
-  if (here) {
-    const g = gaiaMatch(p, e);
-    checks.push(g === undefined ? ["", "Gaia DR3: not loaded yet.", "Gaia DR3: not checked"]
-      : g ? ["warn", `A Gaia DR3 star is ${g.sep.toFixed(1)}″ away (G = ${fmt(g.g, 1)}): the source may be that known star, or blended with it. Check SIMBAD and the other visits before reporting.`, `Gaia DR3 star within ${REP_GAIA_ARCSEC}": yes, ${g.sep.toFixed(1)}" away, G = ${fmt(g.g, 1)}`]
-      : ["good", `No Gaia DR3 star within ${REP_GAIA_ARCSEC}″.`, `Gaia DR3 star within ${REP_GAIA_ARCSEC}": none`]);
-    if (e.archival) checks.push(["", "Known asteroids are checked on SPHEREx visits only: pick a SPHEREx visit.", "Known asteroids/comets: not checked (archival frame)"]);
-    else if (!S.ast) checks.push(S.rep.astFail ? ["", "Known asteroids and comets (JPL): service unavailable.", "Known asteroids/comets (JPL): not checked, service unavailable"]
-      : ["", "Known asteroids and comets (JPL): checking…", "Known asteroids/comets (JPL): not checked"]);
-    else {
-      const near = (S.ast[S.sphIdx.get(e.epoch)]?.objects || []).map((o) => ({ o, d: sepArcsec(p, o) })).sort((a, b) => a.d - b.d)[0];
-      checks.push(near && near.d < REP_AST_ARCSEC
-        ? ["warn", `Known Solar System object ${esc(near.o.name)}, ${near.d.toFixed(0)}″ away in this visit (JPL): not a new discovery.`, `Known asteroid/comet within ${REP_AST_ARCSEC}" (JPL): ${near.o.name}, ${near.d.toFixed(0)}" away`]
-        : ["good", `No known asteroid or comet within ${REP_AST_ARCSEC}″ in this visit (JPL Small-Body Identification).`, `Known asteroid/comet within ${REP_AST_ARCSEC}" (JPL): none`]);
-    }
-    const [x, y] = world2pix(p.ra, p.dec), cand = (S.cands?.[S.rep.k] || []).find((c) => Math.hypot(c.x - x, c.y - y) <= 2.5);
-    const label = { mover: "mover?", variable: "variable?", single: "one visit only" };
-    if (cand) checks.push(["", `Automatic detection here in this visit: “${label[cand.kind]}” (${cand.v.toFixed(0)}σ).`, `Automatic detection in this visit: ${label[cand.kind]} (${cand.v.toFixed(0)} sigma)`]);
-  }
-  const r = p.ra.toFixed(5), d = p.dec.toFixed(5);
-  checks.push(["", `Search the catalogues yourself: ${a_(`https://simbad.cds.unistra.fr/simbad/sim-coo?Coord=${r}%20${d}&Radius=1&Radius.unit=arcmin`, "SIMBAD (1′)")} · ${a_(`https://vsx.aavso.org/index.php?view=results.get&coords=${r}+${d}&format=d&size=1&unit=2`, "VSX variable stars (1′)")} · ${a_(`https://www.wis-tns.org/search?ra=${r}&decl=${d}&radius=10&coords_unit=arcsec`, "TNS transients (10″)")}`, null]);
-  S.rep.checks = checks;
-  $("repChecks").innerHTML = checks.map(([c, h]) => `<li class="${c}">${h}</li>`).join("");
-  // per-visit photometry at exactly this position (for VSX/TNS evidence)
-  if (here && (!S.rep.lc || S.rep.lc.ra !== p.ra || S.rep.lc.dec !== p.dec)) {
-    const key = S.key, lc = (S.rep.lc = { ra: p.ra, dec: p.dec, rows: null });
-    api(`/api/spectrum/${key}?ra=${p.ra}&dec=${p.dec}`)
-      .then((res) => { lc.rows = res.lightcurve || []; })
-      .catch(() => { lc.rows = []; lc.failed = true; })
-      .finally(() => { if (S.rep && S.rep.lc === lc && S.key === key) writeReport(); });
-  }
-  if (!here) S.rep.lc = null;
-  writeReport();
-}
-function writeReport() {   // the "where to report" steps and the plain-text report
-  if (!S.rep) return;
-  const type = $("repType").value, how = REP_HOW[type];
-  $("repHow").innerHTML = `<ol>${how.steps.map((s) => `<li>${s}</li>`).join("")}</ol><p class="name-rule">${how.names}</p>`;
-  const p = S.rep.pos;
-  if (!p) return;
-  const e = S.epochs[S.rep.k] || S.epochs[S.cur], nick = $("repNick").value.trim();
-  const h = new URLSearchParams({ ra: p.ra.toFixed(6), dec: p.dec.toFixed(6), fov: S.result.fov_arcmin, mode: S.mode, dets: [...S.dets].join(","), name: nick || "Discovery report" });
-  const L = [
-    `${document.title} - discovery report`,
-    "(prepared in the browser by the reporter; the tool sends and stores nothing)",
-    "",
-    `Nickname (informal, not an official name): ${nick || "-"}`,
-    `Reported by: ${$("repBy").value.trim() || "-"}`,
-    `Type (reporter's assessment): ${$("repType").selectedOptions[0].textContent}`,
-    `Position (J2000): RA ${sexa(p.ra, true)}, Dec ${sexa(p.dec)}  (RA ${p.ra.toFixed(6)} deg, Dec ${p.dec.toFixed(6)} deg)`,
-    `Position from: ${S.rep.posNote}`,
-    `Seen in: ${e.archival ? `archival ${visitText(e)} image` : `SPHEREx visit ${visitText(e)}`}`,
-    `SPHEREx visits of this field: ${S.sph.map(visitText).join("; ")}`,
-    "",
-    "Checks:",
-    ...S.rep.checks.filter((c) => c[2]).map((c) => `  ${c[2]}`),
-  ];
-  const lc = S.rep.lc;
-  if (lc) {
-    L.push("", "Per-visit flux at this position (forced PSF photometry, mJy, +- 1 sigma):");
-    if (!lc.rows) L.push("  measuring...");
-    else if (!lc.rows.length) L.push(`  ${lc.failed ? "not available (measurement failed)" : "no measurements"}`);
-    else {
-      const byVisit = new Map();
-      const order = (r) => S.sphIdx.get(r.epoch) ?? r.mjd;   // visits in time order, detectors D1..D6 within a visit
-      for (const row of [...lc.rows].sort((a, b) => order(a) - order(b) || DETS.indexOf(a.det) - DETS.indexOf(b.det))) {
-        const v = S.epochs.find((x) => x.epoch === row.epoch);
-        const k = v ? visitText(v) : mjdToDate(row.mjd);
-        if (!byVisit.has(k)) byVisit.set(k, []);
-        byVisit.get(k).push(`${row.det} ${fmt(row.flux_mjy, 3)}+-${fmt(row.err_mjy, 3)}`);
-      }
-      for (const [k, v] of byVisit) L.push(`  ${k}: ${v.join("  ")}`);
-    }
-  }
-  L.push("", `Notes: ${$("repNotes").value.trim() || "-"}`, "",
-    `View: ${location.origin}${location.pathname}#${h}`,
-    `Data: NASA SPHEREx spectral images via NASA/IPAC IRSA; viewer: ${document.title} (NASA Space Apps 2026)`,
-    `Prepared (UTC): ${new Date().toISOString().slice(0, 16).replace("T", " ")}`);
-  $("repText").value = ascii(L.join("\n"));
-}
-function reportFileName() {
-  const p = S.rep.pos;
-  return `spherex-report-J${sexa(p.ra, true).replace(/:/g, "")}${sexa(p.dec).replace("−", "-").replace(/:/g, "")}.txt`;
-}
 
 // ---------------------------------------------------------------- sharing and embedding
 function viewUrl(embed) {
@@ -1355,7 +1077,7 @@ async function updateContext() {
   if (!al || !S.result) return;
   const [ny, nx] = S.result.grid.shape, c = S.result.grid.crval;
   al.removeLayers?.();
-  S.pickCat = null; S.repCat = null; S.pick = null; $("pick").hidden = true;
+  S.pickCat = null; S.pick = null; $("pick").hidden = true;
   if (isMoving()) {
     const pts = S.epochs.map((e) => [e.target_ra, e.target_dec]);
     const ras = pts.map((p) => p[0]), decs = pts.map((p) => p[1]);
@@ -1662,23 +1384,11 @@ async function main() {
   ["trkDist", "trkVe", "trkVn"].forEach((id) => ($(id).oninput = trkRedraw));
   $("saveCand").onclick = addSaved;
   $("savedCsv").onclick = downloadSaved;
-  $("reportBtn").onclick = () => openReport();
-  $("repClose").onclick = closeReport;
-  $("repUseClick").onclick = () => S.rep && setRepPos(S.rep.click, true);
-  let repTimer = null;
-  $("repPos").oninput = () => { if (S.rep) S.rep.src = "hand"; clearTimeout(repTimer); repTimer = setTimeout(updateReport, 400); };
-  $("repType").onchange = writeReport;
-  ["repNick", "repBy", "repNotes"].forEach((id) => ($(id).oninput = writeReport));
-  $("repCopy").onclick = () => {
-    $("repText").select();
-    navigator.clipboard?.writeText($("repText").value).then(() => { $("repCopy").textContent = "Copied ✓"; setTimeout(() => ($("repCopy").textContent = "Copy report"), 1500); }).catch(() => {});
-  };
-  $("repDl").onclick = () => {
-    if (!S.rep || !S.rep.pos) return;
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(new Blob([$("repText").value], { type: "text/plain" })); a.download = reportFileName(); a.click();
-    URL.revokeObjectURL(a.href);
-  };
+  // "where discoveries are reported": the list under the card's heading opens and closes with the heading button (closed at first)
+  const showReportBody = (open) => { $("reportBody").hidden = !open; $("reportToggle").setAttribute("aria-expanded", String(open)); };
+  $("reportToggle").onclick = () => showReportBody($("reportBody").hidden);
+  // the menu button opens the list and scrolls to it; not a #link, because the hash holds the view settings
+  $("reportGo").onclick = () => { showReportBody(true); $("reportCard").scrollIntoView({ behavior: "smooth", block: "start" }); };
   $("copyLink").onclick = () => share(viewUrl(false), $("copyLink"));
   $("copyEmbed").onclick = () => share(`<iframe src="${viewUrl(true)}" width="600" height="760" style="border:0" loading="lazy" title="SPHEREx Time Machine"></iframe>`, $("copyEmbed"));
   renderSaved();

@@ -162,7 +162,7 @@
       </details>
       <div class="group share">
         <button id="saveCand" title="Save the clicked position (or the target) to your candidate list">★ Save as candidate</button>
-        <button id="reportBtn" title="Prepare a discovery report for the clicked position (or the target): known-object checks, a ready-to-paste report and where to send it">Report a discovery</button>
+        <button id="reportGo" type="button" title="Where discoveries are reported: the official services for each kind of object (bottom of the page)">Report a discovery ↓</button>
         <button id="copyLink" title="Link to exactly this view">Copy link</button>
         <button id="copyEmbed" title="HTML snippet that shows this viewer inside another web page">Copy embed code</button>
         <input id="shareBox" type="text" readonly hidden aria-label="Text to copy">
@@ -231,51 +231,34 @@
       </ul>
     </section>
     <!-- last child of .side on purpose: the cards above are placed in the grid by their position -->
-    <section class="card report" id="reportCard" hidden>
-      <div class="card-head">
-        <h3>Report a discovery</h3>
-        <button id="repClose" class="ghost small">Close</button>
-      </div>
-      <p class="muted small">This tool sends and stores nothing: it checks whether the source is already known, writes a report for you and tells you where to send it. Reporting is your own step.</p>
+    <section class="card report" id="reportCard">
+      <h3><button id="reportToggle" class="rep-toggle" type="button" aria-expanded="false" aria-controls="reportBody">Found something new? Where discoveries are reported <span class="chev" aria-hidden="true">▸</span></button></h3>
+      <p class="muted small">This tool does not register discoveries. Each kind of object has its own official service: the finder reports it there, and official names come from those services, not from the finder. First make sure it is not already known (Gaia DR3 and Known asteroids overlays, SIMBAD under External resources) and not an artifact (Data-quality notes; seen in more than one visit).</p>
+      <div id="reportBody" hidden>
       <div class="rep-cols">
-        <div class="rep-form">
-          <label class="rep-field">Position (RA Dec)
-            <span class="rep-row"><input id="repPos" type="text" spellcheck="false" aria-label="Position of the source">
-            <button id="repUseClick" class="small" title="Back to the position taken from the image">Use clicked position</button></span>
-          </label>
-          <p class="small muted" id="repPosNote"></p>
-          <label class="rep-field">What is it?
-            <select id="repType">
-              <option value="moving">Moving Solar System body (asteroid, comet, distant planet)</option>
-              <option value="brown">Brown dwarf or fast-moving star</option>
-              <option value="variable">Variable star (changes brightness, does not move)</option>
-              <option value="transient">Transient (appears in one visit, does not move)</option>
-              <option value="unsure">Not sure yet</option>
-            </select>
-          </label>
-          <label class="rep-field">Your name for it
-            <input id="repNick" type="text" maxlength="60" placeholder="e.g. Ada's Wanderer">
-          </label>
-          <p class="small muted">An informal nickname only. Official names and designations are given by the bodies listed on the right, not by finders or by this tool.</p>
-          <label class="rep-field">Reported by (optional)
-            <input id="repBy" type="text" maxlength="80" placeholder="your name or handle">
-          </label>
-          <label class="rep-field">Notes (optional)
-            <textarea id="repNotes" rows="3" placeholder="what you saw, e.g. dipole in Difference mode in two visits"></textarea>
-          </label>
-          <h4>1. Is it already known?</h4>
-          <ul id="repChecks" class="small rep-list"></ul>
+        <div class="rep-kind">
+          <h4>Moving Solar System body <span class="muted">(asteroid, comet, distant planet)</span></h4>
+          <p>The IAU <a href="https://docs.minorplanetcenter.net/mpc-ops-docs/astrometry/reporting-observations/" target="_blank" rel="noopener">Minor Planet Center (MPC) ↗</a> takes measured positions (ADES format) from observers with an <a href="https://docs.minorplanetcenter.net/mpc-ops-docs/observatory-and-program-codes/observatory-codes/" target="_blank" rel="noopener">MPC observatory code ↗</a>; new observers ask for a code and first show good measurements of known objects. In practice, send your finding to an astronomy club, observatory or survey team that reports to the MPC.</p>
+          <p>A possible comet: also e-mail the IAU <a href="http://www.cbat.eps.harvard.edu/HowToReportDiscovery.html" target="_blank" rel="noopener">Central Bureau for Astronomical Telegrams (CBAT) ↗</a> at <code>cbatiau@eps.harvard.edu</code>, as plain text with the object type in the subject line.</p>
+          <p class="name-rule">Names: once an asteroid is numbered, its discoverer may propose a name, which the IAU Working Group on Small Body Nomenclature approves. Comets carry the names of their discoverers.</p>
         </div>
-        <div class="rep-out">
-          <h4>2. Where to report it</h4>
-          <div id="repHow" class="small"></div>
-          <h4>3. Your report</h4>
-          <textarea id="repText" rows="12" readonly spellcheck="false" aria-label="Report text"></textarea>
-          <div class="rep-row">
-            <button id="repCopy" class="primary small">Copy report</button>
-            <button id="repDl" class="small">Download .txt</button>
-          </div>
+        <div class="rep-kind">
+          <h4>Brown dwarf or fast-moving star</h4>
+          <p>There is no official registry. Post it on the <a href="https://www.zooniverse.org/projects/marckuchner/backyard-worlds-planet-9/talk/694" target="_blank" rel="noopener">Backyard Worlds: Planet 9 Talk forum ↗</a> (Science board, Zooniverse account needed to post), where volunteers and astronomers discuss candidates and arrange follow-up with other telescopes. Volunteers who found brown dwarfs this way have been co-authors of the science papers.</p>
+          <p class="name-rule">Names: catalogue designations built from the coordinates (e.g. WISEA J110125.95+540052.8). The IAU does not give personal names to stars.</p>
         </div>
+        <div class="rep-kind">
+          <h4>Variable star <span class="muted">(changes brightness, does not move)</span></h4>
+          <p><a href="https://vsx.aavso.org/index.php?view=registration.top" target="_blank" rel="noopener">Register ↗</a> and log in at the AAVSO International Variable Star Index (VSX), then use <a href="https://vsx.aavso.org/index.php?view=submit.top" target="_blank" rel="noopener">Submit ↗</a> to enter a new variable star. Moderators check that it is variable and new; its light curve is the evidence. A sudden outburst (possible nova) goes to the CBAT first.</p>
+          <p class="name-rule">Names: VSX lists the star under a catalogue designation; the finder does not choose it.</p>
+        </div>
+        <div class="rep-kind">
+          <h4>Transient <span class="muted">(appears in one visit, does not move)</span></h4>
+          <p><a href="https://www.wis-tns.org/user/register" target="_blank" rel="noopener">Request an account ↗</a> on the IAU <a href="https://www.wis-tns.org/" target="_blank" rel="noopener">Transient Name Server (TNS) ↗</a> (it asks for your affiliation or, without one, why you need the account), log in and open <b>Reports → AT report</b>. It asks for the discovery brightness and the last time the source was not seen. Novae and comets: the CBAT.</p>
+          <p class="name-rule">Names: TNS gives every new transient a designation such as AT 2026abc; your own name for it can go in its “Internal name” field.</p>
+        </div>
+      </div>
+      <p class="muted small">Steps checked against each service's own pages on 15 November 2026; they may change their menus.</p>
       </div>
     </section>
   </aside>
