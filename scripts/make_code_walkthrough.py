@@ -302,6 +302,10 @@ H1("10. Arayüz: index.html, style.css, app.js")
 P("<code>index.html</code> iskelettir: üstte arama çubuğu, tarih kutuları ve hazır hedefler; ortada iki üst üste tuval "
   "(<code>#img</code> görüntü, <code>#overlay</code> işaretler), altında kontroller ve paylaşım düğmeleri; yanda tayf, ışık eğrisi, aday listesi ve notlar. "
   "Grafikleri Plotly, gökyüzü bağlam haritasını Aladin Lite çizer. Tüm mantık <code>app.js</code>'tedir.")
+P("<code>app.js</code> bir öğeyi gizlemek için <code>hidden</code> özniteliğini kullanır. Tarayıcının bu öznitelik için verdiği "
+  "<code>display: none</code>, sayfanın kendi CSS kurallarından zayıftır: <code>.group { display: flex }</code> gibi bir kural onu ezer "
+  "ve öğe görünür kalır (Track kaydırıcıları bu yüzden her modda görünüyordu). <code>style.css</code>'in başındaki "
+  "<code>[hidden] { display: none !important; }</code> satırı gizlemenin her zaman kazanmasını sağlar.")
 H2("10.1 Durum nesnesi")
 RNG(AJ, r"^const S = \{", r"^\};")
 P("Arayüzün hatırladığı her şey tek nesnededir. Çalışırken eklenenler: <code>sph</code> (SPHEREx ziyaretleri), <code>arch</code> (arşiv kareleri), "
