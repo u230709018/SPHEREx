@@ -176,7 +176,9 @@ function rebuildDisplay() {
   buildTimeline();
   const eps = S.epochs.map((e) => e.epoch);
   const dets = [...S.dets];
-  if (S.mode === "color") {
+  if (S.mode === "blink" && $("detectorOverlay").checked) {
+    S.display = eps.map((ep) => DETS.map((d) => S.dets.has(d) ? S.z.get(`${ep}|${d}`) || null : null));
+  } else if (S.mode === "color") {
     const ch = [["D5", "D6"], ["D3", "D4"], ["D1", "D2"]];
     S.display = eps.map((ep) => ch.map((c) => composite(ep, c)));
   } else if (S.mode === "cdiff") {
@@ -310,7 +312,23 @@ function render() {
   for (let y = 0; y < ny; y++) {
     for (let x = 0; x < nx; x++) {
       const src = y * nx + x, dst = ((ny - 1 - y) * nx + x) * 4;
-      if (chans.length === 3) {
+      if (chans.length === DETS.length) {
+        // Screen-blend independently coloured, partially transparent cutouts.
+        // A positive signal above the local background controls each layer's opacity.
+        const rgb = [0, 0, 0]; let found = false;
+        chans.forEach((a, i) => {
+          if (!a || !Number.isFinite(a[src])) return;
+          found = true;
+          const high = Math.max(2, S.limits[i][1]);
+          const alpha = 0.8 * Math.sqrt(Math.max(0, Math.min(1, (a[src] - 0.5) / (high - 0.5))));
+          const color = DET_COLORS[DETS[i]];
+          for (let c = 0; c < 3; c++) {
+            const component = parseInt(color.slice(1 + c * 2, 3 + c * 2), 16) / 255;
+            rgb[c] = 1 - (1 - rgb[c]) * (1 - alpha * component);
+          }
+        });
+        for (let c = 0; c < 3; c++) img.data[dst + c] = found ? Math.round(rgb[c] * 255) : 0;
+      } else if (chans.length === 3) {
         for (let c = 0; c < 3; c++) {
           const a = chans[c];
           let v = a ? stretch(a[src], S.limits[c], kk) : 0;
@@ -608,6 +626,7 @@ function buildDetButtons() {
   DETS.forEach((d) => {
     const b = document.createElement("button");
     b.innerHTML = `${d}<span class="wl">${DET_WL[d]}µm</span>`;
+    b.style.setProperty("--detector-color", DET_COLORS[d]);
     b.classList.toggle("on", S.dets.has(d));
     b.disabled = !present.has(d);
     b.title = `Detector ${d} (${DET_WL[d]} µm). Shift-click to select only this one.`;
@@ -1207,7 +1226,7 @@ async function main() {
   $("resetView").onclick = () => {
     S.dets = new Set(DETS);
     $("speed").value = 600; $("zoom").value = 1;
-    $("invert").checked = true;
+    $("invert").checked = true; $("detectorOverlay").checked = false;
     if (S.result) buildDetButtons();
     setMode("blink");
   };
@@ -1216,6 +1235,7 @@ async function main() {
   $("nextBtn").onclick = () => { play(false); step(1); };
   document.querySelectorAll(".mode").forEach((b) => (b.onclick = () => setMode(b.dataset.mode)));
   $("invert").oninput = () => { render(); setHash(); };
+  $("detectorOverlay").onchange = () => rebuildDisplay();
   $("zoom").onchange = () => { $("zoom").value = numberSetting("zoom", 1); render(); setHash(); };
   $("speed").onchange = () => { $("speed").value = numberSetting("speed", 600); setHash(); };
   ["ovTarget", "ovGaia", "ovBorder", "ovCand"].forEach((id) => ($(id).onchange = drawOverlay));

@@ -147,7 +147,7 @@ h1 { font-size: 20px; margin: 0; letter-spacing: .2px; }
 .chk input { accent-color: var(--accent); }
 .mode.on { background: var(--accent); color: #04111f; border-color: var(--accent); }
 .dets button { font-size: 12px; padding: 4px 8px; }
-.dets button.on { border-color: var(--accent-2); color: var(--accent-2); }
+.dets button.on { border-color: var(--detector-color); color: var(--detector-color); background: color-mix(in srgb, var(--detector-color) 14%, transparent); }
 .dets button .wl { color: var(--muted); font-size: 11px; margin-left: 3px; }
 .links { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; font-size: 12.5px; }
 .links a { padding: 4px 9px; border: 1px solid var(--line); border-radius: 999px; text-decoration: none; }

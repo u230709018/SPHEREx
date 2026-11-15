@@ -6,9 +6,9 @@ body:has(#skyblink-opening:not([hidden])) { overflow: hidden; }
 #team-view::before {
   content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none;
   background:
-    linear-gradient(180deg, #060914a8, #060914ce),
-    url("skyblink-opening.jpg") center / cover no-repeat;
-  animation: skyblink-workspace-drift 34s ease-in-out infinite alternate;
+    linear-gradient(180deg, #06091470, #06091499),
+    url("skyblink-nebula.png") center / cover no-repeat;
+  animation: skyblink-workspace-drift 60s ease-in-out infinite alternate;
 }
 #team-view .card, #team-view .stage, #team-view .topbar, #team-view .foot {
   border: 0;
@@ -20,8 +20,8 @@ body:has(#skyblink-opening:not([hidden])) { overflow: hidden; }
   background: linear-gradient(#090f20c7, #090f2040);
 }
 @keyframes skyblink-workspace-drift {
-  from { transform: translate3d(-1%, 0, 0) scale(1.04); }
-  to { transform: translate3d(2%, 1.5%, 0) scale(1.16); }
+  from { transform: scale(1.04); }
+  to { transform: translate3d(0.7%, 0.4%, 0) scale(1.07); }
 }
 #skyblink-opening {
   position: fixed; inset: 0; z-index: 10000; isolation: isolate;
