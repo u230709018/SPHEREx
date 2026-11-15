@@ -154,6 +154,7 @@
       </details>
       <div class="group share">
         <button id="saveCand" title="Save the clicked position (or the target) to your candidate list">★ Save as candidate</button>
+        <button id="reportBtn" title="Prepare a discovery report for the clicked position (or the target): known-object checks, a ready-to-paste report and where to send it">Report a discovery</button>
         <button id="copyLink" title="Link to exactly this view">Copy link</button>
         <button id="copyEmbed" title="HTML snippet that shows this viewer inside another web page">Copy embed code</button>
         <input id="shareBox" type="text" readonly hidden aria-label="Text to copy">
@@ -220,6 +221,54 @@
         <li><b>Check:</b> Artifacts and missing Gaia matches need further investigation.</li>
         <li><b>Save:</b> Click a source and choose “Save as candidate” to keep it in this browser.</li>
       </ul>
+    </section>
+    <!-- last child of .side on purpose: the cards above are placed in the grid by their position -->
+    <section class="card report" id="reportCard" hidden>
+      <div class="card-head">
+        <h3>Report a discovery</h3>
+        <button id="repClose" class="ghost small">Close</button>
+      </div>
+      <p class="muted small">This tool sends and stores nothing: it checks whether the source is already known, writes a report for you and tells you where to send it. Reporting is your own step.</p>
+      <div class="rep-cols">
+        <div class="rep-form">
+          <label class="rep-field">Position (RA Dec)
+            <span class="rep-row"><input id="repPos" type="text" spellcheck="false" aria-label="Position of the source">
+            <button id="repUseClick" class="small" title="Back to the position taken from the image">Use clicked position</button></span>
+          </label>
+          <p class="small muted" id="repPosNote"></p>
+          <label class="rep-field">What is it?
+            <select id="repType">
+              <option value="moving">Moving Solar System body (asteroid, comet, distant planet)</option>
+              <option value="brown">Brown dwarf or fast-moving star</option>
+              <option value="variable">Variable star (changes brightness, does not move)</option>
+              <option value="transient">Transient (appears in one visit, does not move)</option>
+              <option value="unsure">Not sure yet</option>
+            </select>
+          </label>
+          <label class="rep-field">Your name for it
+            <input id="repNick" type="text" maxlength="60" placeholder="e.g. Ada's Wanderer">
+          </label>
+          <p class="small muted">An informal nickname only. Official names and designations are given by the bodies listed on the right, not by finders or by this tool.</p>
+          <label class="rep-field">Reported by (optional)
+            <input id="repBy" type="text" maxlength="80" placeholder="your name or handle">
+          </label>
+          <label class="rep-field">Notes (optional)
+            <textarea id="repNotes" rows="3" placeholder="what you saw, e.g. dipole in Difference mode in two visits"></textarea>
+          </label>
+          <h4>1. Is it already known?</h4>
+          <ul id="repChecks" class="small rep-list"></ul>
+        </div>
+        <div class="rep-out">
+          <h4>2. Where to report it</h4>
+          <div id="repHow" class="small"></div>
+          <h4>3. Your report</h4>
+          <textarea id="repText" rows="12" readonly spellcheck="false" aria-label="Report text"></textarea>
+          <div class="rep-row">
+            <button id="repCopy" class="primary small">Copy report</button>
+            <button id="repDl" class="small">Download .txt</button>
+          </div>
+        </div>
+      </div>
     </section>
   </aside>
 </main>

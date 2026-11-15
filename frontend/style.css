@@ -175,6 +175,32 @@ h1 { font-size: 20px; margin: 0; letter-spacing: .2px; }
 .cands li { padding: 5px 0; border-bottom: 1px solid var(--line); }
 .cands li:last-child { border-bottom: 0; }
 .cands button { padding: 0 6px; border: 0; }
+.cands button.rep { color: var(--accent); }
+
+/* discovery report panel: a full-width row of its own below the other cards, form left, results right */
+.side > #reportCard { grid-column: 1 / -1; grid-row: 6; }
+.rep-cols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 4px 28px; }
+.rep-cols > div { min-width: 0; }
+@media (max-width: 900px) {
+  .side > #reportCard { grid-column: 1; grid-row: 8; }
+  .rep-cols { grid-template-columns: minmax(0, 1fr); }
+}
+.report h4 { margin: 14px 0 6px; font-size: 13.5px; }
+.report p { margin: 4px 0; }
+.rep-field { display: flex; flex-direction: column; gap: 4px; margin-top: 10px; font-size: 13px; color: var(--muted); }
+.rep-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 6px; }
+.rep-row input { flex: 1; min-width: 0; }
+.report input[type=text], .report select, .report textarea {
+  background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; color: var(--text); font: inherit; font-size: 13px; max-width: 100%;
+}
+.report textarea { width: 100%; resize: vertical; }
+#repText { font-family: ui-monospace, Consolas, monospace; font-size: 11.5px; white-space: pre; }
+#repPos.bad { border-color: var(--bad); }
+.rep-list { padding-left: 18px; margin: 0; line-height: 1.5; }
+.rep-list .good { color: var(--good); }
+.rep-list .warn { color: var(--warn); }
+#repHow ol { padding-left: 18px; margin: 4px 0; line-height: 1.5; }
+#repHow .name-rule { color: var(--muted); }
 
 /* embed=1: only the viewer and its playback controls, for use in an <iframe> */
 .open-full { display: none; margin-top: 10px; font-size: 12.5px; }
@@ -191,6 +217,7 @@ body.embed .layout { grid-template-columns: 1fr; padding: 8px; }
 @media (max-width: 900px) {
   .layout { grid-template-columns: 1fr; padding: 12px; }
   .layout > .viewer, .layout > .context, .side > section { grid-column: 1; }
+  .side > section:nth-child(n) { grid-column: 1; }   /* as specific as the desktop :nth-child() rules, so it wins here */
   .layout > .viewer { grid-row: 1; }
   .side > section:nth-child(1) { grid-row: 2; }
   .side > section:nth-child(2) { grid-row: 3; }
