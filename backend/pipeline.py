@@ -322,7 +322,9 @@ def run_frames_job(p: dict, progress, publish=None) -> dict:
         except Exception:
             pass                            # a preview must never break the job
 
-    pool = ThreadPoolExecutor(max_workers=24)
+    # 8 parallel downloads saturate a small server's CPU; more would starve the thread below that
+    # turns images into frames and spectrum points (Python's GIL), so the charts would lag behind.
+    pool = ThreadPoolExecutor(max_workers=8)
     futures = [(groups[0][0], [(rec, pool.submit(fetch, rec)) for rec in groups[0][1]])]
     last_pub = time.time()
     for gi, (label, items) in enumerate(futures):
