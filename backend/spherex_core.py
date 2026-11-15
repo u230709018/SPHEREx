@@ -98,6 +98,30 @@ class Cutout:
     epsf: np.ndarray | None = None   # effective PSF of the detector zone under this cutout (oversampled)
     epsf_ovs: int = 5
     _spec_wcs: WCS | None = field(default=None, repr=False)
+    wave_map: np.ndarray | None = field(default=None, repr=False)   # wavelength (um) at every pixel
+
+    def compact(self):
+        """Replace the full FITS header and spectral-WCS table by a per-pixel wavelength map.
+        Cuts the memory of a cutout from ~300 kB to ~70 kB, so many fields can stay in memory."""
+        try:
+            ny, nx = self.image.shape
+            yy, xx = np.mgrid[0:ny, 0:nx]
+            spec = self._spectral_wcs()
+            wl, _bw = spec.pixel_to_world(xx, yy)
+            wl = wl.to_value("um") if hasattr(wl, "to_value") else np.asarray(wl, dtype=float)
+            self.wave_map = np.asarray(wl, dtype=np.float32)
+            self.hdul_header, self.wave_table, self._spec_wcs = None, None, None
+        except Exception:
+            pass                      # keep the header: wavelength_at falls back to the spectral WCS
+        return self
+
+    def _spectral_wcs(self) -> WCS:
+        if self._spec_wcs is None:
+            hdul = fits.HDUList([fits.PrimaryHDU(), fits.ImageHDU(header=self.hdul_header, name="IMAGE"),
+                                 self.wave_table])
+            self._spec_wcs = WCS(self.hdul_header, fobj=hdul, key="W")
+            self._spec_wcs.sip = None
+        return self._spec_wcs
 
     def psf_image(self, x0: float, y0: float) -> np.ndarray | None:
         """Unit-flux image of a point source at pixel (x0, y0), from the SPHEREx ePSF.
@@ -114,12 +138,10 @@ class Cutout:
 
     def wavelength_at(self, x: float, y: float) -> float | None:
         try:
-            if self._spec_wcs is None:
-                hdul = fits.HDUList([fits.PrimaryHDU(), fits.ImageHDU(header=self.hdul_header, name="IMAGE"),
-                                     self.wave_table])
-                self._spec_wcs = WCS(self.hdul_header, fobj=hdul, key="W")
-                self._spec_wcs.sip = None
-            wl, _bw = self._spec_wcs.pixel_to_world(x, y)
+            if self.wave_map is not None:     # smooth linear-variable filter: bilinear between pixel centres
+                v = map_coordinates(self.wave_map, [[y], [x]], order=1, mode="nearest")[0]
+                return float(v) if np.isfinite(v) else None
+            wl, _bw = self._spectral_wcs().pixel_to_world(x, y)
             return float(wl.to_value("um")) if hasattr(wl, "to_value") else float(wl)
         except Exception:
             return None
@@ -295,7 +317,7 @@ def load_cutout(rec: ImageRecord, path: Path) -> Cutout | None:
     display = image.copy()
     display[((flags & mask_of(DISPLAY_BAD_FLAGS)) != 0) | ~np.isfinite(display)] = np.nan
     image[((flags & mask_of(BAD_FLAGS)) != 0) | ~np.isfinite(image)] = np.nan
-    return Cutout(rec, image, display, var, flags, bits, WCS(hdr), hdr, wave, n_tr, epsf, ovs)
+    return Cutout(rec, image, display, var, flags, bits, WCS(hdr), hdr, wave, n_tr, epsf, ovs).compact()
 
 
 # --------------------------------------------------------------------------- #

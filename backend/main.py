@@ -88,6 +88,16 @@ def _run(job_id: str, params: dict, fn=None):
         _set(job_id, status="error", message=str(err))
 
 
+@app.on_event("startup")
+def warm_demo_fields():
+    """After a (re)start the server has no images on disk: load the stored demo fields' images and
+    Gaia neighbours in the background, one after the other, so clicking a star in them is quick."""
+    for f in sorted(pl.RESULTS_DIR.glob("*.json")):
+        if f.name.startswith(("arch_", "mv_", "gaia_")):
+            continue
+        pl.prefetch_cutouts(f.stem)
+
+
 @app.get("/api/targets")
 def targets():
     return [{k: t[k] for k in ("id", "name", "ra", "dec", "pmra", "pmdec", "ref_epoch", "kind", "note")}
