@@ -27,9 +27,12 @@ const S = {
 // ---------------------------------------------------------------- helpers
 const fmt = (x, d = 2) => (x == null || !isFinite(x) ? "–" : Number(x).toFixed(d));
 function sexa(deg, isRa) {
-  let v = isRa ? deg / 15 : Math.abs(deg);
-  const a = Math.floor(v), b = Math.floor((v - a) * 60), c = ((v - a) * 60 - b) * 60;
-  const s = `${String(a).padStart(2, "0")}:${String(b).padStart(2, "0")}:${c.toFixed(isRa ? 2 : 1).padStart(isRa ? 5 : 4, "0")}`;
+  // round once, in units of the last digit shown, so 59.99 s never prints as "60.0"
+  const dp = isRa ? 2 : 1, f = 10 ** dp, day = 86400 * f;
+  let tot = Math.round((isRa ? deg / 15 : Math.abs(deg)) * 3600 * f);
+  if (isRa) tot = ((tot % day) + day) % day;
+  const a = Math.floor(tot / (3600 * f)), b = Math.floor((tot % (3600 * f)) / (60 * f)), c = (tot % (60 * f)) / f;
+  const s = `${String(a).padStart(2, "0")}:${String(b).padStart(2, "0")}:${c.toFixed(dp).padStart(dp + 3, "0")}`;
   return isRa ? s : (deg < 0 ? "−" : "+") + s;
 }
 function parseCoords(text) {
@@ -436,6 +439,14 @@ function showProgress(on, msg, frac) {
 // New fields load at full quality (up to 8 images per visit and detector, ~1 min on the live site).
 // Results made with fewer images (QUICK, older links) get a "Sharper images" button.
 const QUICK = { max_per_cell: 3, budget: 120 }, FULL = { max_per_cell: 8, budget: 260 };
+function resetView() {   // a new field is loading: nothing of the previous target may stay on screen
+  play(false);
+  S.result = null; S.key = null; S.epochs = []; S.sph = []; S.display = []; S.arch = null; S.cands = [];
+  $("badges").innerHTML = ""; $("timeline").innerHTML = ""; $("epochLabel").textContent = ""; $("readout").textContent = "";
+  $("links").innerHTML = ""; $("warnCard").hidden = true; rangeNote(null); liveStatus(null);
+  render();
+  clearCharts();
+}
 function clearCharts() {   // a new field is loading: do not leave the previous target's charts on screen
   S.spec = { points: [], lightcurve: [] };
   $("specTitle").textContent = "Spectrum (waiting for images…)"; $("specReset").hidden = true;
@@ -446,7 +457,7 @@ function clearCharts() {   // a new field is loading: do not leave the previous 
   S.spec = null;
 }
 async function loadTarget(t, fov, quality = FULL) {
-  clearCharts();
+  resetView();
   S.target = t; S.fov = fov; S.gaia = null; S.ast = null; S.spec = null; S.specLabel = null;
   $("ovAst").checked = false; $("candidates").hidden = true;
   $("empty").hidden = true; $("targetName").textContent = t.name || `${sexa(t.ra, true)} ${sexa(t.dec)}`;
@@ -460,7 +471,7 @@ async function loadTarget(t, fov, quality = FULL) {
   runJob("/api/frames", body, "Could not load this field.");
 }
 async function loadObject(name, fov) {
-  clearCharts();
+  resetView();
   S.target = { name, sso: true, pmra: 0, pmdec: 0 }; S.fov = Math.min(fov || 4, 15); setFovOption(S.fov);
   S.gaia = null; S.ast = null; S.spec = null; S.specLabel = null; $("ovAst").checked = false;
   $("empty").hidden = true; $("candidates").hidden = true;
@@ -1013,6 +1024,15 @@ function propagateJs(t, jyear) {
   const dec = t.dec + ((t.pmdec || 0) * dt) / 3.6e6;
   return [t.ra + ((t.pmra || 0) * dt) / 3.6e6 / Math.cos(t.dec * D2R), dec];
 }
+// First visit: the sky map is shown at once (Orion, a rich and recognisable field), ready to pick a position.
+async function showSkyStart() {
+  $("contextCard").hidden = false;
+  const al = await ensureAladin();
+  if (!al || S.target) return;
+  al.gotoRaDec(83.82, -5.39);
+  const box = $("aladin"), aspect = Math.max(1, box.clientWidth / Math.max(1, box.clientHeight));
+  al.setFoV(1.6 * aspect);
+}
 async function updateContext() {
   $("contextCard").hidden = false;
   const al = await ensureAladin();
@@ -1068,7 +1088,7 @@ async function updateContext() {
 // ---------------------------------------------------------------- charts
 const PLOT_LAYOUT = {
   paper_bgcolor: "rgba(0,0,0,0)", plot_bgcolor: "rgba(0,0,0,0)", font: { color: "#cfd8e8", size: 11 },
-  margin: { l: 50, r: 10, t: 10, b: 40 }, showlegend: true, legend: { orientation: "h", y: -0.25, font: { size: 10 } },
+  margin: { l: 50, r: 12, t: 26, b: 40 }, showlegend: true, autosize: true, legend: { orientation: "h", y: -0.25, font: { size: 10 } },
   xaxis: { gridcolor: "#24304a", zerolinecolor: "#24304a" }, yaxis: { gridcolor: "#24304a", zerolinecolor: "#24304a" },
 };
 const EPOCH_COLORS = ["#4fb3ff", "#ffb547", "#39d98a", "#ff6b6b", "#c58cff", "#5ef0e0", "#f0e05e", "#ff8fc7"];
@@ -1103,9 +1123,13 @@ function plotSpectrum() {
     font: { size: 9, color: "#7f9cc8" }, yanchor: "bottom" }));
   LINES.forEach(([w, t]) => { shapes.push({ type: "line", xref: "x", yref: "paper", x0: w, x1: w, y0: 0, y1: 0.92, line: { color: "rgba(255,181,71,.35)", dash: "dot", width: 1 } });
     ann.push({ x: w, y: 0.92, xref: "x", yref: "paper", text: t, showarrow: false, font: { size: 8, color: "#c9a35e" }, yanchor: "bottom" }); });
+  // y range: every good measurement is visible; flagged points far outside are counted, not plotted off-scale
   const goodPts = pts.filter((p) => p.good);
-  const ys = (goodPts.length >= 5 ? goodPts : pts).map((p) => p.flux_mjy).sort((a, b) => a - b);
-  const y0 = percentile(ys, 3), y1 = percentile(ys, 97), pad = Math.max(0.15 * (y1 - y0), 0.05 * Math.abs(y1) || 0.05);
+  const ys = (goodPts.length ? goodPts : pts).map((p) => p.flux_mjy).filter(Number.isFinite).sort((a, b) => a - b);
+  const y0 = ys.length ? ys[0] : 0, y1 = ys.length ? ys.at(-1) : 1, pad = Math.max(0.08 * (y1 - y0), 0.05 * Math.abs(y1) || 0.05);
+  const out = bad.filter((p) => p.flux_mjy < y0 - pad || p.flux_mjy > y1 + pad * 1.6).length;
+  if (out) ann.push({ xref: "paper", yref: "paper", x: 1, y: -0.32, xanchor: "right", yanchor: "top", showarrow: false,
+    text: `${out} flagged point${out > 1 ? "s" : ""} outside the plot`, font: { size: 9, color: "#8e9bb3" } });
   Plotly.react("specPlot", traces, { ...PLOT_LAYOUT, shapes, annotations: ann,
     xaxis: { ...PLOT_LAYOUT.xaxis, title: "Wavelength (µm)", range: [0.7, 5.05] },
     yaxis: { ...PLOT_LAYOUT.yaxis, title: "Flux density (mJy)", range: ys.length ? [y0 - pad, y1 + pad * 1.6] : undefined } },
@@ -1133,7 +1157,9 @@ function plotLightcurve() {
     });
     const skipped = DETS.filter((d) => lc.some((r) => r.det === d) && !used.includes(d));
     if (skipped.length) annotations.push(note(`not detected in ${skipped.join(", ")}`));
-    yaxis = { ...PLOT_LAYOUT.yaxis, title: "Flux / median", type: lcLog() ? "log" : "linear" };
+    const log = lcLog(), ticks = [0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 20];
+    yaxis = { ...PLOT_LAYOUT.yaxis, title: "Flux / median", type: log ? "log" : "linear",
+      ...(log ? { tickvals: ticks, ticktext: ticks.map(String) } : {}) };   // explicit labels ("0.5", not "5")
   } else if (lc.length) {
     // nothing detected (empty sky or a very faint source): show the measured fluxes in mJy around zero
     DETS.forEach((d) => {
@@ -1358,5 +1384,6 @@ async function main() {
   });
   window.addEventListener("load", () => { if (S.spec) { plotSpectrum(); plotLightcurve(); } });
   await initFromHash(targets);
+  if (!S.target) showSkyStart();   // nothing to load from the link: show the sky right away
 }
 main();

@@ -59,6 +59,9 @@ h1 { font-size: 20px; margin: 0; letter-spacing: .2px; }
   flex: 1; display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(320px, 1fr);
   gap: 16px; padding: 16px 20px;
 }
+/* grid items may shrink below their content width, so nothing pushes the page wider than the screen */
+.layout > * { min-width: 0; }
+.stage, .timeline, .controls, .links, .plot { max-width: 100%; }
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; }
 .card h3 { margin: 0 0 8px; font-size: 15px; }
 .card-head { display: flex; justify-content: space-between; align-items: center; }
@@ -163,7 +166,11 @@ body.embed .layout { grid-template-columns: 1fr; padding: 8px; }
 .foot p { margin: 4px 0; max-width: 1100px; }
 
 @media (max-width: 900px) {
-  .layout { grid-template-columns: 1fr; padding: 12px; }
+  .layout { grid-template-columns: minmax(0, 1fr); padding: 12px; }
+  .badge { white-space: normal; }
+  .viewer-head { flex-direction: column; }
+  .badges { justify-content: flex-start; }
+  .dates input { width: 118px; }
   .layout > .context, .layout > .side { grid-column: 1; grid-row: auto; }
   .topbar { grid-template-columns: 1fr; padding: 12px; }
   .search { flex-wrap: wrap; }
