@@ -15,6 +15,8 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
 import numpy as np
 from astropy.time import Time
 
@@ -131,13 +133,22 @@ def _gaia_mast(ra, dec, radius_deg, gmax):
 
 def gaia_sources(ra: float, dec: float, radius_deg: float, jyears: list[float], gmax: float = 19.0) -> dict:
     """Gaia DR3 sources propagated from J2016.0 to each requested epoch."""
+    # Ask ESA and MAST at the same time and use the first good answer: either archive can be slow
+    # or down (ESA timed out for minutes on 15 Nov 2026 while MAST answered in ~1.5 s).
     rows, provider = None, None
-    for name, fn in (("ESA Gaia Archive", _gaia_esa), ("MAST", _gaia_mast)):
-        try:
-            rows, provider = fn(ra, dec, radius_deg, gmax), name
-            break
-        except Exception:
-            continue
+    pool = ThreadPoolExecutor(max_workers=2)
+    futs = {pool.submit(fn, ra, dec, radius_deg, gmax): name
+            for name, fn in (("ESA Gaia Archive", _gaia_esa), ("MAST", _gaia_mast))}
+    try:
+        for fut in as_completed(futs, timeout=45):
+            try:
+                rows, provider = fut.result(), futs[fut]
+                break
+            except Exception:
+                continue
+    except Exception:
+        pass                                   # both timed out
+    pool.shutdown(wait=False)
     if rows is None:
         return {"provider": None, "sources": [], "error": "Gaia services unreachable"}
 

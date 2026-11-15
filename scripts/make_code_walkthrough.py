@@ -302,6 +302,10 @@ H1("10. Arayüz: index.html, style.css, app.js")
 P("<code>index.html</code> iskelettir: üstte arama çubuğu, tarih kutuları ve hazır hedefler; ortada iki üst üste tuval "
   "(<code>#img</code> görüntü, <code>#overlay</code> işaretler), altında kontroller ve paylaşım düğmeleri; yanda tayf, ışık eğrisi, aday listesi ve notlar. "
   "Grafikleri Plotly, gökyüzü bağlam haritasını Aladin Lite çizer. Tüm mantık <code>app.js</code>'tedir.")
+P("<code>app.js</code> bir öğeyi gizlemek için <code>hidden</code> özniteliğini kullanır. Tarayıcının bu öznitelik için verdiği "
+  "<code>display: none</code>, sayfanın kendi CSS kurallarından zayıftır: <code>.group { display: flex }</code> gibi bir kural onu ezer "
+  "ve öğe görünür kalır (Track kaydırıcıları bu yüzden her modda görünüyordu). <code>style.css</code>'in başındaki "
+  "<code>[hidden] { display: none !important; }</code> satırı gizlemenin her zaman kazanmasını sağlar.")
 H2("10.1 Durum nesnesi")
 RNG(AJ, r"^const S = \{", r"^\};")
 P("Arayüzün hatırladığı her şey tek nesnededir. Çalışırken eklenenler: <code>sph</code> (SPHEREx ziyaretleri), <code>arch</code> (arşiv kareleri), "
@@ -402,7 +406,46 @@ UL("<b>Latest image rozeti:</b> alandaki en yeni SPHEREx görüntüsünün tarih
    "<b>README:</b> yeni veri sürümünden sonra dizinin ve önbelleğin nasıl yenileneceğini anlatan bölüm.")
 
 # ------------------------------------------------------------------ 12
-H1("12. Diğer dosyalar")
+H1("12. Paralaks izleyici (Track modu)")
+H2("12.1 Sorun: medyan, ziyaret içinde hareket edeni siler")
+P("Normal kareler bir ziyaretin bütün görüntülerinin piksel medyanıdır (<code>combine_cell</code>). Bu, kozmik ışınları siler; "
+  "ama ziyaret sürerken (10–40 gün) yer değiştiren her şeyi de bulanıklaştırır ya da siler. Neptün'ün çok ötesindeki bir cisim "
+  "gökyüzünde esas olarak Dünya kendisi hareket ettiği için kayar (paralaks).")
+UL("Ölçüm (gerçek ziyaretler): ziyaretler çoğunlukla 10–40 gün sürer, dedektör başına 7–8 görüntü indirilir.",
+   "Eris'in Temmuz 2025 ziyaretinde (15 gün) Dünya'nın hareketiyle kayma: 35 AU'da 46 px, 95,6 AU'da 17 px, 300 AU'da 5,4 px, 500 AU'da 3,3 px, 1000 AU'da 1,6 px.",
+   "SPHEREx Güneş'e yaklaşık 90° bakarak tarar; bu yönde paralaks hareketi en yavaştır (duraklama noktası). Bu yüzden izleyicinin en çok işe yaradığı aralık birkaç yüz AU'ya kadardır; "
+   "daha uzakta medyan cismi silmez, yalnızca birkaç piksel bulanıklaştırır.")
+H2("12.2 Model: uzayda sabit nokta + sabit gökyüzü hızı")
+P("Cisim, ziyaretin ortasındaki görüntü anında, alanın merkez yönünde, <i>d</i> AU uzaklıkta uzayda sabit bir nokta (P) kabul edilir. "
+  "Her görüntünün anındaki Dünya konumundan P'nin yönü hesaplanır ve piksele çevrilir; cismin kendi yörünge hareketi için doğuya ve kuzeye sabit bir ek hız (″/gün) eklenir.")
+UL("JPL Horizons ile sınama (40 gün): yalnızca uzaklık modeli 19–138 px yanılırken, uzaklık + sabit hız modelinin en büyük hatası Eris 0,02, Makemake 0,13, Sedna 0,06, Neptün 0,39 px.",
+   "Bulunan hızlar her cisim için Ocak ve Temmuz'da aynı çıktı (Eris +1,26 / +2,59″/gün): bu gerçekten cismin yörünge hareketidir. Neptün için hesaplanan 21″/gün, 30 AU'da 5,4 km/s'ye denk gelir (gerçek yörünge hızı).",
+   "400–800 AU'da yörünge hızı en fazla ~0,3″/gün: 40 günde 2 pikselden az. Orada uzaklık tek başına yeterlidir.")
+H2("12.3 Sunucu: bir ziyaretin tek görüntüleri")
+PY("backend/tracker.py", "visit_images")
+P("Alan bellekteyse kesitler oradan alınır; değilse yalnızca istenen ziyaretin kesitleri paralel indirilir (bütün alan değil: 81 sn yerine 1,7 sn). "
+  "Her kesit <code>reproject_one</code> ile ortak ızgaraya taşınır; her görüntü anındaki Dünya konumu astropy'nin yerleşik efemeridinden hesaplanır (ağa çıkmaz). "
+  "Sonuç <code>trk_&lt;anahtar&gt;_&lt;ziyaret&gt;.json</code> olarak saklanır (ziyaret başına ~0,6 MB). Uç nokta: <code>/api/track/{key}/{epoch}</code>.")
+H2("12.4 Arayüz: kaydır ve medyan al")
+JS(AJ, "trkShifts")
+P("Ziyaretin ortadaki görüntüsü referanstır: P = Dünya(referans) + d × merkez yönü. Her görüntü için P − Dünya(t) yönü <code>world2pix</code> ile piksele çevrilir; "
+  "ızgarada x batıya doğru büyüdüğü için doğu hızı x'ten çıkarılır.")
+JS(AJ, "trackFrame")
+UL("Her görüntü, cismin o görüntüdeki yerinden bilinear örneklenir; böylece cisim her görüntüde aynı piksele gelir.",
+   "Her dedektörde medyan alınır, sonra dedektörler takımın <code>composite</code>'i gibi toplanıp kareköküne bölünür.",
+   "Alanın dışına düşen görüntüler o pikselde atlanır. Bir pikselde en az 3 görüntü (ya da hepsi) aranır; tek bir kozmik ışın sahte kaynak olmasın.")
+JS(AJ, "trkNote")
+P("Kaydırıcı logaritmiktir (25–4000 AU). Değerler adrese yazılır (<code>&amp;mode=track&amp;dist=35&amp;ve=17.5&amp;vn=-1.2</code>), yani bir tespit bağlantıyla paylaşılabilir. Klavye: T.")
+H2("12.5 Gerçek veriyle sınama")
+UL("<b>Pluto</b> (V = 14,5, 35 AU), 25 Eylül – 12 Ekim 2025 ziyareti, 8′ alan, 43 görüntü. Ziyaret boyunca 49 piksel yürüdüğü için normal karede yok. "
+   "Track modunda Horizons'tan hesaplanan değerlerle (35 AU, +17,53 / −1,16″/gün) tek bir kaynak <b>92σ</b>'ya çıkar; 30 AU'da 24σ, 40 AU'da 30σ, 25 AU'da 8,7σ, 200 AU'da 7,2σ. "
+   "Ek hız olmadan 35 AU'da 7,9σ: bu uzaklıkta yörünge hızı gereklidir.",
+   "Tepenin konumu (+5, −1 px) Pluto'nun referans görüntü anındaki Horizons konumuyla (+5,4, −0,8 px) yarım pikselden iyi örtüşür. Görüntüde yıldızlar çizgi olur, Pluto tek noktada toplanır.",
+   "<b>Eris</b> (V = 18,6, 95,6 AU), Temmuz 2025: dedektör başına ~8 görüntüyle gürültüden ayrılamadı (4,5σ, yanlış uzaklıklarda da benzer tepeler). Sınır izleyicinin değil, görüntü sayısının; "
+   "ziyaretteki 114 görüntünün tamamı kullanılırsa derinlik artar.")
+
+# ------------------------------------------------------------------ 13
+H1("13. Diğer dosyalar")
 RNG("backend/targets.json", r'"id": "wise0855"', r'"note"')
 P("Hazır hedeflerin konumu, öz hareketi ve bu değerlerin ait olduğu yıl.")
 RNG("scripts/warm_cache.py", r"^fovs = ", r"FAILED")
@@ -410,13 +453,15 @@ P("Hazır hedefleri önceden hesaplayıp <code>data/results/</code> klasörüne 
 RNG("render.yaml", r"^services:", r"value: ")
 P("Render'a siteyi nasıl kuracağını söyler. <code>autoDeploy: true</code> olduğu için <code>main</code> dalına her gönderim canlı siteyi günceller.")
 
-# ------------------------------------------------------------------ 13
-H1("13. Bilinen sınırlar")
+# ------------------------------------------------------------------ 14
+H1("14. Bilinen sınırlar")
 UL("Yeni bir alanın tam yüklemesi ücretli küçük sunucuda ~1 dakika sürer; ilk kareler çok daha önce gelir.",
    "Dizin kurulduğu andaki görüntüleri bilir; yeni veri için <code>scripts/list_s3.py</code> ve <code>scripts/build_index.py</code> çalıştırılıp dizin dosyası commit'lenmelidir (otomatik değildir).",
    "Çok parlak yıldızlar doymuştur: tayfları yaklaşık, ışık eğrileri yalnızca görelidir.",
    "Otomatik aday kutuları ipucudur; demo alanlarında ayarlanmıştır, başka alanlarda yanlış alarm oranı ölçülmedi.",
    "2MASS ve WISE başka teleskoplardır: konumları karşılaştırın, parlaklıklarını değil.",
+   "Paralaks izleyici yalnızca indirilen görüntüleri kullanır (dedektör başına ~8); sönük cisimler (Eris gibi) için yetmez. Ziyaret içinde çalışır; ziyaretler arası 6 ayda uzak bir cisim alanın dışına çıkar. "
+   "Birkaç yüz AU'nun ötesinde kazanç azalır, çünkü SPHEREx'in bakış yönünde paralaks hareketi en yavaştır.",
    "Aday listesi yalnızca o tarayıcıda durur; tarayıcı verisi silinirse kaybolur.")
 
 CSS = """

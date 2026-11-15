@@ -14,6 +14,8 @@
   font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 }
 * { box-sizing: border-box; }
+/* The hidden attribute must win over display rules such as .group { display: flex } */
+[hidden] { display: none !important; }
 html, body { margin: 0; background: var(--bg); color: var(--text); }
 body { min-height: 100vh; display: flex; flex-direction: column; }
 a { color: var(--accent); }
@@ -67,6 +69,9 @@ h1 { font-size: 20px; margin: 0; letter-spacing: .2px; }
   gap: 16px; padding: 16px 20px; width: 100%; max-width: 1200px; margin: 0 auto;
   align-content: start;
 }
+/* grid items may shrink below their content width, so nothing pushes the page wider than the screen */
+.layout > * { min-width: 0; }
+.stage, .timeline, .controls, .links, .plot { max-width: 100%; }
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; }
 .card h3 { margin: 0 0 8px; font-size: 15px; }
 .card-head { display: flex; justify-content: space-between; align-items: center; }
@@ -170,6 +175,8 @@ h1 { font-size: 20px; margin: 0; letter-spacing: .2px; }
 .empty .examples button { font-size: 12.5px; padding: 4px 10px; border-radius: 999px; }
 .empty .examples .k { color: var(--muted); margin-left: 6px; }
 .empty .small { margin: 8px 0; }
+.tracker input.num { width: 58px; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 3px 5px; color: var(--text); }
+.tracker #trkNote { flex-basis: 100%; }
 .share input { flex: 1; min-width: 160px; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; font-size: 12px; }
 .cands { list-style: none; padding: 0; margin: 0 0 8px; line-height: 1.5; }
 .cands li { padding: 5px 0; border-bottom: 1px solid var(--line); }
@@ -215,7 +222,7 @@ body.embed .layout { grid-template-columns: 1fr; padding: 8px; }
 .foot summary { cursor: pointer; color: var(--accent); }
 
 @media (max-width: 900px) {
-  .layout { grid-template-columns: 1fr; padding: 12px; }
+  .layout { grid-template-columns: minmax(0, 1fr); padding: 12px; }
   .layout > .viewer, .layout > .context, .side > section { grid-column: 1; }
   .side > section:nth-child(n) { grid-column: 1; }   /* as specific as the desktop :nth-child() rules, so it wins here */
   .layout > .viewer { grid-row: 1; }
@@ -226,6 +233,8 @@ body.embed .layout { grid-template-columns: 1fr; padding: 8px; }
   .side > section:nth-child(5) { grid-row: 6; }
   .side > section:nth-child(4) { grid-row: 7; }
   .side:has(#warnCard[hidden]) > section:nth-child(5) { grid-column: 1; }
+  .badge { white-space: normal; }
+  .dates input { width: 118px; }
   .topbar { grid-template-columns: 1fr; padding: 12px; }
   .search { flex-wrap: wrap; }
   .search input[type=text] { flex-basis: 100%; order: -1; }

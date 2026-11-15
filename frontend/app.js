@@ -27,9 +27,12 @@ const S = {
 // ---------------------------------------------------------------- helpers
 const fmt = (x, d = 2) => (x == null || !isFinite(x) ? "–" : Number(x).toFixed(d));
 function sexa(deg, isRa) {
-  let v = isRa ? deg / 15 : Math.abs(deg);
-  const a = Math.floor(v), b = Math.floor((v - a) * 60), c = ((v - a) * 60 - b) * 60;
-  const s = `${String(a).padStart(2, "0")}:${String(b).padStart(2, "0")}:${c.toFixed(isRa ? 2 : 1).padStart(isRa ? 5 : 4, "0")}`;
+  // round once, in units of the last digit shown, so 59.99 s never prints as "60.0"
+  const dp = isRa ? 2 : 1, f = 10 ** dp, day = 86400 * f;
+  let tot = Math.round((isRa ? deg / 15 : Math.abs(deg)) * 3600 * f);
+  if (isRa) tot = ((tot % day) + day) % day;
+  const a = Math.floor(tot / (3600 * f)), b = Math.floor((tot % (3600 * f)) / (60 * f)), c = (tot % (60 * f)) / f;
+  const s = `${String(a).padStart(2, "0")}:${String(b).padStart(2, "0")}:${c.toFixed(dp).padStart(dp + 3, "0")}`;
   return isRa ? s : (deg < 0 ? "−" : "+") + s;
 }
 function parseCoords(text) {
@@ -205,6 +208,7 @@ function rebuildDisplay() {
       });
     } else S.display = base.map((a) => [a]);
   }
+  if (S.mode === "track") S.display = trackDisplay();
   findCandidates();
   computeLimits();
   render();
@@ -356,9 +360,11 @@ function render() {
   } else {
     $("epochLabel").textContent = e.archival ? `${e.label} · ${e.date_start.slice(0, 4)} · ${archBands(e)} (archival${S.mode === "diff" ? ", minus SPHEREx median" : ""})`
       : S.mode === "stack" ? `Stack of all ${S.epochs.length} visits`
+      : S.mode === "track" ? `${e.date_start} → ${e.date_end.slice(5)} · ${trackLabel(e.epoch)}`
       : `${e.date_start}${e.date_end !== e.date_start ? " → " + e.date_end.slice(5) : ""} · ${e.n_images} images · ${S.mode === "color" ? "colour" : S.mode === "cdiff" ? "D5+D6 − D4" : [...S.dets].join("+")}${S.mode === "diff" ? " − median" : ""}`;
   }
   document.querySelectorAll(".timeline button").forEach((b, i) => b.classList.toggle("cur", i === S.cur));
+  if (S.mode === "track") trkNote();   // the drift depends on the visit on screen
   drawOverlay();
 }
 function view() {
@@ -473,6 +479,15 @@ function showProgress(on, msg, frac) {
 // New fields load at full quality (up to 8 images per visit and detector, ~1 min on the live site).
 // Results made with fewer images (QUICK, older links) get a "Sharper images" button.
 const QUICK = { max_per_cell: 3, budget: 120 }, FULL = { max_per_cell: 8, budget: 260 };
+function resetView() {   // a new field is loading: nothing of the previous target may stay on screen
+  play(false);
+  S.result = null; S.key = null; S.epochs = []; S.sph = []; S.display = []; S.arch = null; S.cands = [];
+  $("badges").innerHTML = ""; $("timeline").innerHTML = ""; $("epochLabel").textContent = ""; $("readout").textContent = "";
+  $("links").innerHTML = ""; $("warnCard").hidden = true; rangeNote(null); liveStatus(null);
+  closeReport();
+  render();
+  clearCharts();
+}
 function clearCharts() {   // a new field is loading: do not leave the previous target's charts on screen
   S.spec = { points: [], lightcurve: [] };
   $("specTitle").textContent = "Spectrum (waiting for images…)"; $("specReset").hidden = true;
@@ -483,7 +498,7 @@ function clearCharts() {   // a new field is loading: do not leave the previous 
   S.spec = null;
 }
 async function loadTarget(t, fov, quality = FULL) {
-  clearCharts(); closeReport();
+  resetView();
   S.target = t; S.fov = fov; S.gaia = null; S.ast = null; S.spec = null; S.specLabel = null;
   $("ovAst").checked = false; $("candidates").hidden = true;
   $("empty").hidden = true; $("targetName").textContent = t.name || `${sexa(t.ra, true)} ${sexa(t.dec)}`;
@@ -497,7 +512,7 @@ async function loadTarget(t, fov, quality = FULL) {
   runJob("/api/frames", body, "Could not load this field.");
 }
 async function loadObject(name, fov) {
-  clearCharts(); closeReport();
+  resetView();
   S.target = { name, sso: true, pmra: 0, pmdec: 0 }; S.fov = Math.min(fov || 4, 15); setFovOption(S.fov);
   S.gaia = null; S.ast = null; S.spec = null; S.specLabel = null; $("ovAst").checked = false;
   $("empty").hidden = true; $("candidates").hidden = true;
@@ -594,7 +609,8 @@ function onResult(res, opt = {}) {
   }
   if (res.mode === "moving") {
     S.dets = new Set(DETS);                 // each frame is a single detector image
-    if (S.mode === "diff" || S.mode === "cdiff") S.mode = "blink";
+    if (S.mode === "diff" || S.mode === "cdiff" || S.mode === "track") S.mode = "blink";
+    $("tracker").hidden = true;
     document.querySelectorAll(".mode").forEach((b) => b.classList.toggle("on", b.dataset.mode === S.mode));
     $("targetName").textContent = res.name;
   }
@@ -1116,6 +1132,105 @@ function share(text, btn) {   // show the text ready to copy, and copy it when t
   navigator.clipboard?.writeText(text).then(() => { btn.textContent = "Copied ✓"; setTimeout(() => (btn.textContent = label), 1500); }).catch(() => {});
 }
 
+// ---------------------------------------------------------------- parallax tracker
+/* The normal frames are a median of all images of a visit, which also removes anything that moves
+   during the visit (10-40 days). A body far beyond Neptune drifts mostly because the Earth moves
+   (~17 px in a 15-day visit at 100 AU, ~3 px at 500 AU). Here the single images of a visit are shifted along the path of a body at a
+   trial distance d (a fixed point in space seen from the Earth's position at each image) plus a
+   constant on-sky rate for its own orbit, then median-stacked: such a body adds up, stars smear.
+   Checked against JPL Horizons for Eris, Makemake, Sedna and Neptune: < 0.4 px over 40 days. */
+const TRK = { key: null, visits: new Map(), loading: new Set(), failed: new Set() };
+const fmtAU = (d) => `${d < 100 ? d.toFixed(0) : Math.round(d / 10) * 10} AU`;
+function trkParams() { return { d: 10 ** +$("trkDist").value, ve: +$("trkVe").value || 0, vn: +$("trkVn").value || 0 }; }
+function trkVisit(ep) {   // normalised single images of one SPHEREx visit (fetched on demand), or null
+  if (!S.result || isMoving() || ep < 0) return null;
+  if (TRK.key !== S.key) { TRK.key = S.key; TRK.visits.clear(); TRK.loading.clear(); TRK.failed.clear(); }
+  if (TRK.visits.has(ep)) return TRK.visits.get(ep);
+  // the server keeps a field only when it has finished loading: ask after that, and not again after a failure
+  if (S.result.partial || TRK.failed.has(ep)) return null;
+  if (!TRK.loading.has(ep)) {
+    const key = S.key;
+    TRK.loading.add(ep);
+    api(`/api/track/${key}/${ep}`).then((r) => {
+      if (TRK.key !== key) return;
+      TRK.visits.set(ep, r.images.map((im) => {   // same normalisation as normaliseFrames
+        const a = decodeF32(im.data), fin = Array.from(a).filter(Number.isFinite).sort((p, q) => p - q);
+        const med = percentile(fin, 50), mad = percentile(fin.map((v) => Math.abs(v - med)).sort((p, q) => p - q), 50) * 1.4826 || 1;
+        for (let i = 0; i < a.length; i++) a[i] = (a[i] - med) / mad;
+        return { mjd: im.mjd, det: im.det, earth: im.earth, z: a };
+      }));
+    }).catch(() => { if (TRK.key === key) TRK.failed.add(ep); })   // pressing Track again retries
+      .finally(() => { TRK.loading.delete(ep); if (TRK.key === key) trkRedraw(); });
+  }
+  return null;
+}
+function trkShifts(ims, p) {   // [dx, dy] px of the body in each image, relative to the visit's middle image
+  const [ra0, dec0] = S.result.grid.crval, pix = Math.abs(S.result.grid.cdelt[0]) * 3600;
+  const u0 = [Math.cos(dec0 * D2R) * Math.cos(ra0 * D2R), Math.cos(dec0 * D2R) * Math.sin(ra0 * D2R), Math.sin(dec0 * D2R)];
+  const ref = ims[ims.length >> 1], P = ref.earth.map((e, k) => e + p.d * u0[k]);   // the body, fixed in space
+  const [cx, cy] = world2pix(ra0, dec0);
+  return ims.map((im) => {
+    const v = P.map((x, k) => x - im.earth[k]), n = Math.hypot(...v);
+    const [x, y] = world2pix((Math.atan2(v[1], v[0]) / D2R + 360) % 360, Math.asin(v[2] / n) / D2R), dt = im.mjd - ref.mjd;
+    return [x - cx - (p.ve * dt) / pix, y - cy + (p.vn * dt) / pix];   // grid x grows westward
+  });
+}
+function bilinear(a, nx, ny, x, y) {
+  const x0 = Math.floor(x), y0 = Math.floor(y), fx = x - x0, fy = y - y0;
+  if (x0 < 0 || y0 < 0 || x0 >= nx - 1 || y0 >= ny - 1) return NaN;
+  const i = y0 * nx + x0;
+  return (a[i] * (1 - fx) + a[i + 1] * fx) * (1 - fy) + (a[i + nx] * (1 - fx) + a[i + nx + 1] * fx) * fy;
+}
+function trackFrame(ep) {   // shift-and-median of one visit for the current trial distance and rate
+  const ims = trkVisit(ep);
+  if (!ims || !ims.length) return null;
+  const [ny, nx] = S.result.grid.shape, sh = trkShifts(ims, trkParams());
+  const dets = ims.some((im) => S.dets.has(im.det)) ? [...S.dets] : DETS;
+  const out = new Float32Array(nx * ny), cnt = new Uint8Array(nx * ny), tmp = [];
+  for (const det of dets) {
+    const sel = ims.map((im, k) => [im.z, sh[k]]).filter((_, k) => ims[k].det === det);
+    if (!sel.length) continue;
+    const need = Math.min(3, sel.length);   // one image alone could be a cosmic ray
+    for (let y = 0; y < ny; y++) for (let x = 0; x < nx; x++) {
+      tmp.length = 0;
+      for (const [z, [sx, sy]] of sel) { const v = bilinear(z, nx, ny, x + sx, y + sy); if (Number.isFinite(v)) tmp.push(v); }
+      if (tmp.length < need) continue;
+      tmp.sort((a, b) => a - b);
+      const h = tmp.length >> 1, i = y * nx + x;
+      out[i] += tmp.length & 1 ? tmp[h] : (tmp[h - 1] + tmp[h]) / 2; cnt[i]++;
+    }
+  }
+  for (let i = 0; i < out.length; i++) out[i] = cnt[i] ? out[i] / Math.sqrt(cnt[i]) : NaN;   // as in composite()
+  return out;
+}
+function trackDisplay() {   // until a visit's single images are there, show its normal frame
+  return S.epochs.map((e) => [e.archival ? null : trackFrame(e.epoch) || composite(e.epoch, [...S.dets])]);
+}
+function trackLabel(ep) {
+  const ims = TRK.key === S.key ? TRK.visits.get(ep) : null;
+  if (S.result.partial) return "normal frame: Track starts when the field has finished loading";
+  if (TRK.key === S.key && TRK.failed.has(ep)) return "normal frame: the single images could not be loaded (press Track to retry)";
+  if (!ims) return "normal frame while the single images load…";
+  if (!ims.length) return "no single images for this visit";
+  const n = ims.filter((im) => S.dets.has(im.det)).length || ims.length;
+  return `${n} single image${n === 1 ? "" : "s"} shifted for a body at ${fmtAU(trkParams().d)}`;
+}
+function trkNote() {
+  const p = trkParams();
+  $("trkDistVal").textContent = fmtAU(p.d);
+  const e = S.epochs[S.cur], ims = e && TRK.key === S.key ? TRK.visits.get(e.epoch) : null;
+  if (S.mode !== "track" || !ims || !ims.length) { $("trkNote").textContent = ""; return; }
+  const sh = trkShifts(ims, p), xs = sh.map((s) => s[0]), ys = sh.map((s) => s[1]);
+  const drift = Math.hypot(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys));
+  $("trkNote").textContent = `A body at ${fmtAU(p.d)} moves ${drift.toFixed(0)} px (${(drift * 6.15 / 60).toFixed(1)}′) during this visit; ` +
+    `where it leaves the field, those images are left out. Stars smear, the body adds up at the right distance.`;
+}
+function trkRedraw() {
+  trkNote();
+  if (S.mode !== "track" || !S.result) return;
+  S.display = trackDisplay(); computeLimits(); render(); setHash();
+}
+
 // ---------------------------------------------------------------- measured proper motion
 /* Centroid the target in every visit (near its predicted position) and fit a straight line in
    time. SPHEREx astrometry is good to <0.3", so even ~1-pixel motions over a year are measurable. */
@@ -1225,6 +1340,15 @@ function propagateJs(t, jyear) {
   const dec = t.dec + ((t.pmdec || 0) * dt) / 3.6e6;
   return [t.ra + ((t.pmra || 0) * dt) / 3.6e6 / Math.cos(t.dec * D2R), dec];
 }
+// First visit: the sky map is shown at once (Orion, a rich and recognisable field), ready to pick a position.
+async function showSkyStart() {
+  $("contextCard").hidden = false;
+  const al = await ensureAladin();
+  if (!al || S.target) return;
+  al.gotoRaDec(83.82, -5.39);
+  const box = $("aladin"), aspect = Math.max(1, box.clientWidth / Math.max(1, box.clientHeight));
+  al.setFoV(1.6 * aspect);
+}
 async function updateContext() {
   $("contextCard").hidden = false;
   const al = await ensureAladin();
@@ -1280,7 +1404,7 @@ async function updateContext() {
 // ---------------------------------------------------------------- charts
 const PLOT_LAYOUT = {
   paper_bgcolor: "rgba(0,0,0,0)", plot_bgcolor: "rgba(0,0,0,0)", font: { color: "#cfd8e8", size: 11 },
-  margin: { l: 50, r: 10, t: 10, b: 40 }, showlegend: true, legend: { orientation: "h", y: -0.25, font: { size: 10 } },
+  margin: { l: 50, r: 12, t: 26, b: 40 }, showlegend: true, autosize: true, legend: { orientation: "h", y: -0.25, font: { size: 10 } },
   xaxis: { gridcolor: "#24304a", zerolinecolor: "#24304a" }, yaxis: { gridcolor: "#24304a", zerolinecolor: "#24304a" },
 };
 const EPOCH_COLORS = ["#4fb3ff", "#ffb547", "#39d98a", "#ff6b6b", "#c58cff", "#5ef0e0", "#f0e05e", "#ff8fc7"];
@@ -1315,9 +1439,13 @@ function plotSpectrum() {
     font: { size: 9, color: "#7f9cc8" }, yanchor: "bottom" }));
   LINES.forEach(([w, t]) => { shapes.push({ type: "line", xref: "x", yref: "paper", x0: w, x1: w, y0: 0, y1: 0.92, line: { color: "rgba(255,181,71,.35)", dash: "dot", width: 1 } });
     ann.push({ x: w, y: 0.92, xref: "x", yref: "paper", text: t, showarrow: false, font: { size: 8, color: "#c9a35e" }, yanchor: "bottom" }); });
+  // y range: every good measurement is visible; flagged points far outside are counted, not plotted off-scale
   const goodPts = pts.filter((p) => p.good);
-  const ys = (goodPts.length >= 5 ? goodPts : pts).map((p) => p.flux_mjy).sort((a, b) => a - b);
-  const y0 = percentile(ys, 3), y1 = percentile(ys, 97), pad = Math.max(0.15 * (y1 - y0), 0.05 * Math.abs(y1) || 0.05);
+  const ys = (goodPts.length ? goodPts : pts).map((p) => p.flux_mjy).filter(Number.isFinite).sort((a, b) => a - b);
+  const y0 = ys.length ? ys[0] : 0, y1 = ys.length ? ys.at(-1) : 1, pad = Math.max(0.08 * (y1 - y0), 0.05 * Math.abs(y1) || 0.05);
+  const out = bad.filter((p) => p.flux_mjy < y0 - pad || p.flux_mjy > y1 + pad * 1.6).length;
+  if (out) ann.push({ xref: "paper", yref: "paper", x: 1, y: -0.32, xanchor: "right", yanchor: "top", showarrow: false,
+    text: `${out} flagged point${out > 1 ? "s" : ""} outside the plot`, font: { size: 9, color: "#8e9bb3" } });
   Plotly.react("specPlot", traces, { ...PLOT_LAYOUT, shapes, annotations: ann,
     xaxis: { ...PLOT_LAYOUT.xaxis, title: "Wavelength (µm)", range: [0.7, 5.05] },
     yaxis: { ...PLOT_LAYOUT.yaxis, title: "Flux density (mJy)", range: ys.length ? [y0 - pad, y1 + pad * 1.6] : undefined } },
@@ -1345,7 +1473,9 @@ function plotLightcurve() {
     });
     const skipped = DETS.filter((d) => lc.some((r) => r.det === d) && !used.includes(d));
     if (skipped.length) annotations.push(note(`not detected in ${skipped.join(", ")}`));
-    yaxis = { ...PLOT_LAYOUT.yaxis, title: "Flux / median", type: lcLog() ? "log" : "linear" };
+    const log = lcLog(), ticks = [0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 20];
+    yaxis = { ...PLOT_LAYOUT.yaxis, title: "Flux / median", type: log ? "log" : "linear",
+      ...(log ? { tickvals: ticks, ticktext: ticks.map(String) } : {}) };   // explicit labels ("0.5", not "5")
   } else if (lc.length) {
     // nothing detected (empty sky or a very faint source): show the measured fluxes in mJy around zero
     DETS.forEach((d) => {
@@ -1396,13 +1526,20 @@ function setHash() {
   h.set("fov", S.fov); h.set("mode", S.mode); h.set("dets", [...S.dets].join(","));
   const dr = dateRange(); if (dr.from) h.set("from", dr.from); if (dr.to) h.set("to", dr.to);
   h.set("speed", $("speed").value); if (!$("invert").checked) h.set("invert", "0"); if (+$("zoom").value !== 1) h.set("zoom", $("zoom").value);
+  if (S.mode === "track") {
+    const p = trkParams();
+    h.set("dist", Math.round(p.d)); if (p.ve) h.set("ve", p.ve); if (p.vn) h.set("vn", p.vn);
+  }
   if (S.embed) h.set("embed", "1");
   history.replaceState(null, "", "#" + h.toString());
   $("openFull").href = viewUrl(false);
 }
 function setMode(m) {
+  if (m === "track" && isMoving()) return;   // Solar System object frames are already centred on the object
+  if (m === "track") TRK.failed.clear();
   S.mode = m; document.querySelectorAll(".mode").forEach((b) => b.classList.toggle("on", b.dataset.mode === m));
-  setHash(); rebuildDisplay();
+  $("tracker").hidden = m !== "track";
+  setHash(); rebuildDisplay(); trkNote();
 }
 const esc = (s) => String(s).replace(/[&<>"']/g, (ch) => `&#${ch.charCodeAt(0)};`);
 /* A rejected search: say what is wrong and show the accepted formats as clickable examples. */
@@ -1452,6 +1589,9 @@ async function initFromHash(targets) {
   document.body.classList.toggle("embed", S.embed);
   if (h.get("fov")) setFovOption(+h.get("fov"));
   if (h.get("mode")) S.mode = h.get("mode");
+  if (+h.get("dist") > 0) $("trkDist").value = Math.log10(Math.min(4000, Math.max(25, +h.get("dist"))));
+  $("trkVe").value = +h.get("ve") || 0; $("trkVn").value = +h.get("vn") || 0;
+  $("tracker").hidden = S.mode !== "track"; trkNote();
   if (h.get("dets")) S.dets = new Set(h.get("dets").split(",").filter((d) => DETS.includes(d)));
   // always follow the link (also cleared): a saved-candidate link opened later must not inherit old dates
   $("dFrom").value = /^\d{4}-\d{2}-\d{2}$/.test(h.get("from") || "") ? h.get("from") : "";
@@ -1519,6 +1659,7 @@ async function main() {
   ["ovTarget", "ovGaia", "ovBorder", "ovCand"].forEach((id) => ($(id).onchange = drawOverlay));
   $("ovArch").onchange = () => { rebuildDisplay(); showMotionBadge(); };
   ["dFrom", "dTo"].forEach((id) => { $(id).oninput = validateDates; $(id).onchange = onRangeChange; });
+  ["trkDist", "trkVe", "trkVn"].forEach((id) => ($(id).oninput = trkRedraw));
   $("saveCand").onclick = addSaved;
   $("savedCsv").onclick = downloadSaved;
   $("reportBtn").onclick = () => openReport();
@@ -1571,12 +1712,15 @@ async function main() {
     const r = ov.getBoundingClientRect(), cx = ((ev.clientX - r.left) / r.width) * ov.width, cy = ((ev.clientY - r.top) / r.height) * ov.height;
     const [ra, dec] = pix2world(...fromCanvas(cx, cy));
     S.specLabel = { ra, dec }; drawOverlay();
-    $("specTitle").textContent = `Spectrum at ${sexa(ra, true)} ${sexa(dec)} …`;
+    $("specTitle").textContent = `Measuring at ${sexa(ra, true)} ${sexa(dec)}…`;
+    const slow = setTimeout(() => { if (S.specLabel && S.specLabel.ra === ra) $("specTitle").textContent =
+      `Measuring at ${sexa(ra, true)} ${sexa(dec)}… (first click in a stored field: loading its images, up to ~30 s)`; }, 4000);
     try {
       S.spec = await api(`/api/spectrum/${S.key}?ra=${ra}&dec=${dec}`);
+      clearTimeout(slow);
       $("specTitle").textContent = `Spectrum at ${sexa(ra, true)} ${sexa(dec)}`;
       $("specReset").hidden = false; plotSpectrum(); plotLightcurve();
-    } catch (err) { $("specTitle").textContent = `Spectrum: ${err.message}`; }
+    } catch (err) { clearTimeout(slow); $("specTitle").textContent = `Spectrum: ${err.message}`; }
   });
   document.addEventListener("keydown", (ev) => {
     if (document.getElementById("team-view").inert) return;
@@ -1587,11 +1731,13 @@ async function main() {
     else if (k === "arrowright") { play(false); step(1); }
     else if (k === "b") setMode("blink"); else if (k === "d") setMode("diff"); else if (k === "c") setMode("color");
     else if (k === "s") setMode("stack");
+    else if (k === "t") setMode("track");
     else if (k === "i") { $("invert").checked = !$("invert").checked; render(); setHash(); }
     else if (k === "+" || k === "=") { $("zoom").value = Math.min(4, +$("zoom").value + 0.25); render(); }
     else if (k === "-") { $("zoom").value = Math.max(1, +$("zoom").value - 0.25); render(); }
   });
   window.addEventListener("load", () => { if (S.spec) { plotSpectrum(); plotLightcurve(); } });
   await initFromHash(targets);
+  if (!S.target) showSkyStart();   // nothing to load from the link: show the sky right away
 }
 main();

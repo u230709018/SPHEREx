@@ -48,6 +48,7 @@ Tarayıcıda **http://localhost:8000** adresini açın. Demo hedefleri (`data/re
 | `GET /api/spectrum/{key}?ra&dec` | Alandaki herhangi bir noktanın spektrumu ve ışık eğrisi |
 | `GET /api/gaia?ra&dec&radius_deg&jyears` | Her epoch'a taşınmış Gaia DR3 kaynakları |
 | `GET /api/asteroids?ra&dec&half_width_deg&mjds` | Her epoch'ta bilinen asteroit ve kuyruklu yıldızlar |
+| `GET /api/track/{key}/{epoch}` | Bir ziyaretin tek görüntüleri (ızgarada) ve her görüntü anında Dünya'nın konumu; Track modu (paralaks izleyici) kullanır |
 
 ## 4. Git çalışma düzeni
 

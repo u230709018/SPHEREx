@@ -108,7 +108,7 @@ def _image_header(h: fits.Header) -> fits.Header:
 
 
 def _shift(h: fits.Header, xa: int, ya: int, nx: int, ny: int) -> fits.Header:
-    h = h.copy()
+    h = h.copy()                      # the original still gives the size of the data on disk
     h["NAXIS1"], h["NAXIS2"] = nx, ny
     for suffix in ("", "A", "W"):
         if f"CRPIX1{suffix}" in h:
@@ -184,6 +184,6 @@ def cutout(key: str, ra: float, dec: float, size_deg: float, out: Path) -> Path 
 
     out.parent.mkdir(parents=True, exist_ok=True)
     tmp = out.with_suffix(".s3part")
-    fits.HDUList(hdus).writeto(tmp, overwrite=True, output_verify="silentfix")
+    fits.HDUList(hdus).writeto(tmp, overwrite=True, output_verify="ignore")   # headers come from valid files
     tmp.replace(out)
     return out

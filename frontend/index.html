@@ -101,7 +101,7 @@
         <div class="spinner"></div>
         <p id="progressMsg">Loading…</p>
         <div class="bar"><div id="progressBar"></div></div>
-        <p class="muted small">First load of a new field queries NASA/IPAC IRSA live (1–4 min). Cached fields load instantly.</p>
+        <p class="muted small">A new field starts blinking in about 10–15 s and sharpens while you watch (images read live from the NASA/IPAC SPHEREx archive in the AWS cloud). Fields loaded before open instantly.</p>
       </div>
       <div class="empty" id="empty">
         <p>SPHEREx maps the whole sky every six months in 102 infrared colours.<br>
@@ -125,7 +125,15 @@
       <div class="group modes" role="radiogroup" aria-label="Display mode">
         <button data-mode="blink" class="mode on" title="Blink (B)">Blink</button>
         <button data-mode="diff" class="mode" title="Compare each SPHEREx visit with the median of the other SPHEREx visits (D)">Difference</button>
+        <button data-mode="track" class="mode" title="Parallax tracker: shift the single images of each visit along the path of a distant body and stack them, so a slow mover (e.g. a planet far beyond Neptune) adds up instead of being removed by the median (T)">Track</button>
         <details class="inline-help"><summary aria-label="About difference mode">ⓘ</summary><p>Each SPHEREx visit is compared with the median of the other SPHEREx visits. Archival frames are compared with the SPHEREx median and come from different telescopes.</p></details>
+      </div>
+      <div class="group tracker" id="tracker" hidden>
+        <label title="Trial distance from the Sun. A distant body drifts across the sky mainly because the Earth moves: ~17 px during a 15-day visit at 100 AU, ~3 px at 500 AU.">Distance
+          <input id="trkDist" type="range" min="1.4" max="3.6" step="0.005" value="2.7"> <b id="trkDistVal"></b></label>
+        <label title="Extra on-sky motion of the body itself (its orbit), arcsec/day towards east. ~0 beyond a few hundred AU.">+ east <input id="trkVe" type="number" step="0.1" value="0" class="num">″/day</label>
+        <label title="Extra on-sky motion towards north, arcsec/day">+ north <input id="trkVn" type="number" step="0.1" value="0" class="num">″/day</label>
+        <span class="muted small" id="trkNote"></span>
       </div>
       <div class="group"><span>Detector groups</span><details class="inline-help"><summary aria-label="About detector groups">ⓘ</summary><p>Choose SPHEREx detector groups by their approximate wavelength ranges. These are not individual selections of all 102 spectral bands.</p></details></div>
       <div class="group dets" id="dets" aria-label="Detectors"></div>
@@ -164,7 +172,7 @@
     <a id="openFull" class="open-full" target="_blank" rel="noopener" href="./">Open in SPHEREx Time Machine ↗</a>
   </section>
 
-  <section class="card context" id="contextCard" hidden>
+  <section class="card context" id="contextCard">
     <div class="card-head">
       <h3>Sky context &amp; long-term motion</h3>
       <label class="small muted">Background
@@ -183,7 +191,7 @@
       <a id="pickSimbad" target="_blank" rel="noopener">Look it up on SIMBAD ↗</a>
     </div>
     <p class="muted small">Drag to explore, scroll to zoom, and click a point to select it and load its SPHEREx images.</p>
-    <p class="muted small" id="contextNote">The blue square shows the current SPHEREx field.</p>
+    <p class="muted small" id="contextNote">Explore the whole sky: click any point and load its SPHEREx images. Once a field is loaded, a blue square marks it here and an orange track shows a fast-moving target over the decades. Powered by Aladin Lite (CDS, Strasbourg).</p>
   </section>
 
   <aside class="side">
@@ -280,7 +288,7 @@
   <p>This research has made use of the NASA/IPAC Infrared Science Archive, ESA Gaia DR3 (Gaia Collaboration 2023), the JPL Small-Body Identification API, CDS Sesame, and the Canadian Astronomy Data Centre (operated by the National Research Council of Canada with the support of the Canadian Space Agency). Built for the NASA Space Apps Challenge 2026. Not an official NASA product.</p>
   <p>Sky context powered by Aladin Lite (CDS, Strasbourg).</p>
   </details>
-  <details><summary>Keyboard shortcuts</summary><p class="muted">Space play/pause · ← → step · B blink · D difference · C colour · I invert · + − zoom</p></details>
+  <details><summary>Keyboard shortcuts</summary><p class="muted">Space play/pause · ← → step · B blink · D difference · C colour · S stack · T track · I invert · + − zoom</p></details>
 </footer>
 </div>
 </body>
