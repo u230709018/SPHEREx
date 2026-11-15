@@ -2,8 +2,9 @@
 Single images of one visit on the viewer grid, for the browser's parallax tracker.
 
 The normal frames are a per-pixel median of all images of a visit. That removes cosmic rays, but
-also anything that moves during the visit: a body at 500 AU drifts ~1 px/day across the sky only
-because the Earth moves, and SPHEREx visits last 10-40 days. The tracker shifts the single images
+also anything that moves during the visit (10-40 days). A distant body drifts across the sky mostly
+because the Earth moves: ~17 px during a 15-day visit at 100 AU, ~3 px at 500 AU (SPHEREx looks
+~90 deg from the Sun, where this drift is smallest). The tracker shifts the single images
 along the path of a body at a trial distance (plus a small constant rate for its own orbital
 motion) and takes the median again, so such a body adds up instead of vanishing.
 

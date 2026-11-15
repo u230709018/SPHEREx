@@ -808,7 +808,7 @@ function share(text, btn) {   // show the text ready to copy, and copy it when t
 // ---------------------------------------------------------------- parallax tracker
 /* The normal frames are a median of all images of a visit, which also removes anything that moves
    during the visit (10-40 days). A body far beyond Neptune drifts mostly because the Earth moves
-   (~1 px/day at 500 AU). Here the single images of a visit are shifted along the path of a body at a
+   (~17 px in a 15-day visit at 100 AU, ~3 px at 500 AU). Here the single images of a visit are shifted along the path of a body at a
    trial distance d (a fixed point in space seen from the Earth's position at each image) plus a
    constant on-sky rate for its own orbit, then median-stacked: such a body adds up, stars smear.
    Checked against JPL Horizons for Eris, Makemake, Sedna and Neptune: < 0.4 px over 40 days. */
