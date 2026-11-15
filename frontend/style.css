@@ -144,6 +144,8 @@ h1 { font-size: 20px; margin: 0; letter-spacing: .2px; }
 .empty .examples button { font-size: 12.5px; padding: 4px 10px; border-radius: 999px; }
 .empty .examples .k { color: var(--muted); margin-left: 6px; }
 .empty .small { margin: 8px 0; }
+.tracker input.num { width: 58px; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 3px 5px; color: var(--text); }
+.tracker #trkNote { flex-basis: 100%; }
 .share input { flex: 1; min-width: 160px; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; font-size: 12px; }
 .cands { list-style: none; padding: 0; margin: 0 0 8px; line-height: 1.5; }
 .cands li { padding: 5px 0; border-bottom: 1px solid var(--line); }

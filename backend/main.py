@@ -188,6 +188,16 @@ def index_info():
     return sky_index.info()
 
 
+@app.get("/api/track/{key}/{epoch}")
+def track_images(key: str, epoch: int):
+    """Single images of one visit with the Earth's position, for the parallax tracker."""
+    import tracker
+    r = tracker.visit_images(key, epoch)
+    if r is None:
+        raise HTTPException(404, "Field or visit not loaded")
+    return JSONResponse(r)
+
+
 @app.get("/api/archival/{key}")
 def archival(key: str):
     """2MASS (~2000) and AllWISE (2010) frames of an already loaded field, on the same grid."""
