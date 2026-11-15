@@ -42,13 +42,13 @@ body:has(#skyblink-opening:not([hidden])) { overflow: hidden; }
 #skyblink-opening .landing-menu { padding: 24px; transition: opacity .32s, transform .42s; }
 #skyblink-opening.departing .landing-menu { opacity: 0; transform: translateY(-18px) scale(1.1); }
 #skyblink-opening h1 {
-  font: 750 clamp(58px, 13vw, 150px) / 1 system-ui, sans-serif;
+  font: 750 clamp(48px, 10vw, 120px) / 1 system-ui, sans-serif;
   letter-spacing: -.075em; margin: 0 0 28px; color: inherit;
 }
-#skyblink-opening .opening-mark { display: block; width: clamp(145px, 24vw, 255px); margin: 0 auto 12px; overflow: visible; }
+#skyblink-opening .opening-mark { display: block; width: clamp(115px, 19vw, 205px); margin: 0 auto 12px; overflow: visible; }
 #skyblink-opening .opening-stars { filter: drop-shadow(0 0 9px #a889ff9c); }
 #skyblink-explore {
-  font: 700 16px system-ui, sans-serif; min-width: 148px; padding: 13px 23px;
+  font: 700 14px system-ui, sans-serif; min-width: 122px; padding: 10px 19px;
   border-radius: 100px; border: 0; color: #171126; background: #f1edff;
   box-shadow: 0 6px 45px #af96fb66; cursor: pointer;
 }
